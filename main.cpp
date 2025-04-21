@@ -1,6 +1,4 @@
-#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 #include <GLFW/glfw3.h>
 #include <print>
 #include <vector>
@@ -8,7 +6,7 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 std::vector<char> read_file(const char *filename)
 {
-    std::ifstream file(filename);
+    std::ifstream file(filename, std::ios::binary);
     file.seekg(0,std::ios::end);
     std::streampos length = file.tellg();
     file.seekg(0,std::ios::beg);
@@ -42,10 +40,6 @@ int main()
     if (!window)
         return -1;
 
-    vk::detail::DynamicLoader dl;
-    PFN_vkGetInstanceProcAddr pfnVkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(pfnVkGetInstanceProcAddr);
-
     vk::ApplicationInfo appinfo = vk::ApplicationInfo("Test_vk", VK_MAKE_VERSION(0,1,0), NULL, VK_MAKE_VERSION(0,1,0), VK_API_VERSION_1_4);
     
     uint32_t extension_count = 0;
@@ -69,8 +63,6 @@ int main()
         &appinfo,layers.size(), layers.data(), 
         extensions.size(), extensions.data());
     vk::Instance instance = vk::createInstance(createinfo);
-    
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(instance);
 
     uint32_t count = 0;
     VkResult res = vkEnumeratePhysicalDevices(instance, &count, nullptr);
@@ -114,19 +106,14 @@ int main()
     vk::DeviceQueueCreateInfo queue_info = vk::DeviceQueueCreateInfo(vk::DeviceQueueCreateFlags(), graphics_queue_index, 1, &queue_priority);
 
 
-    uint32_t device_extension_count = 2;
+    uint32_t device_extension_count = 1;
     char *device_extension_names[device_extension_count];
     device_extension_names[0] = (char *)"VK_KHR_swapchain";
-    device_extension_names[1] = (char *)"VK_EXT_shader_object";
     vk::PhysicalDeviceFeatures device_features = vk::PhysicalDeviceFeatures();
-    vk::PhysicalDeviceShaderObjectFeaturesEXT shader_features = vk::PhysicalDeviceShaderObjectFeaturesEXT(true);
 
-    vk::DeviceCreateInfo device_info = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), 1, &queue_info, 0, nullptr, device_extension_count, device_extension_names, &device_features);
-    device_info.pNext = &shader_features;
+    vk::DeviceCreateInfo device_info = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), 1, &queue_info, 0, nullptr, 1, device_extension_names, &device_features);
 
     vk::Device device = selected_physical_device.createDevice(device_info);
-
-    auto dldi = vk::detail::DispatchLoaderDynamic(instance, pfnVkGetInstanceProcAddr, device);
 
     VkSurfaceKHR raw_surface;
     glfwCreateWindowSurface(instance, window, nullptr, &raw_surface);
@@ -210,41 +197,122 @@ int main()
         image_views.push_back(device.createImageView(image_view_info));
     }
 
-
-    std::vector<char> vertex_source = read_file("../shaders/vertex.spv");
-    vk::ShaderCreateInfoEXT vertex_info = {};
-    vertex_info.setFlags(vk::ShaderCreateFlagsEXT(vk::ShaderCreateFlagBitsEXT::eLinkStage));
-    vertex_info.setStage(vk::ShaderStageFlagBits::eVertex);
-    vertex_info.setNextStage(vk::ShaderStageFlagBits::eFragment);
-    vertex_info.setCodeType(vk::ShaderCodeTypeEXT::eSpirv);
-    vertex_info.setCodeSize(vertex_source.size());
-    vertex_info.setPCode(vertex_source.data());
-    vertex_info.setPName("main");
-
-    std::vector<char> fragment_source = read_file("../shaders/fragment.spv");
-    vk::ShaderCreateInfoEXT fragment_info = {};
-    fragment_info.setFlags(vk::ShaderCreateFlagsEXT(vk::ShaderCreateFlagBitsEXT::eLinkStage));
-    fragment_info.setStage(vk::ShaderStageFlagBits::eFragment);
-    fragment_info.setCodeType(vk::ShaderCodeTypeEXT::eSpirv);
-    fragment_info.setCodeSize(fragment_source.size());
-    fragment_info.setPCode(fragment_source.data());
-    fragment_info.setPName("main");
-
-    std::vector<vk::ShaderCreateInfoEXT> shader_infos;
-    shader_infos.push_back(vertex_info);
-    shader_infos.push_back(fragment_info);
-
-    auto shader_result = device.createShadersEXT(shader_infos, nullptr, dldi);
-    std::vector<vk::ShaderEXT> shaders;
-    if (shader_result.result == vk::Result::eSuccess)
-    {
-        shaders = shader_result.value;
-        std::println("Shaders succesfully loaded!");
-    }
     
+    std::vector<char> vertex_shader = read_file("../shaders/vertex.spv");
+    std::vector<char> fragment_shader = read_file("../shaders/fragment.spv");
+    
+    vk::ShaderModuleCreateInfo vertex_shader_info = vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), vertex_shader.size());
+    vertex_shader_info.pCode = (const uint32_t*)(vertex_shader.data());
+
+    vk::ShaderModuleCreateInfo fragment_shader_info = vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), fragment_shader.size());
+    fragment_shader_info.pCode = (const uint32_t*)(fragment_shader.data());
+
+    vk::ShaderModule vertex_module = device.createShaderModule(vertex_shader_info);
+    vk::ShaderModule fragment_module = device.createShaderModule(fragment_shader_info);
+
+    vk::PipelineShaderStageCreateInfo vertex_stage_info = {};
+    vertex_stage_info.stage = vk::ShaderStageFlagBits::eVertex;
+    vertex_stage_info.module = vertex_module;
+    vertex_stage_info.pName = "main";
+
+    vk::PipelineShaderStageCreateInfo fragment_stage_info = {};
+    fragment_stage_info.stage = vk::ShaderStageFlagBits::eFragment;
+    fragment_stage_info.module = fragment_module;
+    fragment_stage_info.pName = "main";
+
+    std::vector<vk::PipelineShaderStageCreateInfo> pipeline_shaders = {vertex_stage_info, fragment_stage_info};
+
+    vk::PipelineVertexInputStateCreateInfo vertex_input_info = {};
+    vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo(vk::PipelineInputAssemblyStateCreateFlags(), 
+                                                                                                            vk::PrimitiveTopology::eTriangleList, VK_FALSE);
+    vk::Viewport viewport = vk::Viewport(0.0f, 0.0f, 
+                                        framebuffer_extension.width, framebuffer_extension.height,
+                                        0.0f, 1.0f);
+    vk::Rect2D scissor;
+    scissor.setOffset({0, 0});
+    scissor.extent = framebuffer_extension;
+
+    vk::PipelineViewportStateCreateInfo viewport_info = vk::PipelineViewportStateCreateInfo(vk::PipelineViewportStateCreateFlags(), 
+                                                                                            1, &viewport, 1, &scissor);
+    vk::PipelineRasterizationStateCreateInfo raster_info = {};
+    raster_info.depthClampEnable = VK_FALSE;
+    raster_info.polygonMode = vk::PolygonMode::eFill;
+    raster_info.lineWidth = 1.0f;
+    raster_info.cullMode = vk::CullModeFlagBits::eBack;
+    raster_info.frontFace = vk::FrontFace::eClockwise;
+    raster_info.depthBiasEnable = VK_FALSE;
+
+    vk::PipelineMultisampleStateCreateInfo multisampling_info = {};
+    multisampling_info.sampleShadingEnable = VK_FALSE;
+    multisampling_info.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+    vk::PipelineColorBlendAttachmentState color_blend_attachment = vk::PipelineColorBlendAttachmentState(VK_FALSE);
+    vk::PipelineColorBlendStateCreateInfo color_blend_info = {};
+    color_blend_info.logicOpEnable = VK_FALSE;
+    color_blend_info.attachmentCount = 1;
+    color_blend_info.pAttachments = &color_blend_attachment;
+
+    vk::PipelineLayoutCreateInfo layout_info = {};
+    vk::PipelineLayout pipeline_layout = device.createPipelineLayout(layout_info);
+
+
+    vk::AttachmentDescription color_attachment = vk::AttachmentDescription(vk::AttachmentDescriptionFlags(), 
+                                                                            format.format, vk::SampleCountFlagBits::e1,
+                                                                            vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
+                                                                            vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare,
+                                                                            vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR);
+    vk::AttachmentReference attachment_ref = vk::AttachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal);
+    vk::SubpassDescription subpass_description = {};
+    subpass_description.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpass_description.colorAttachmentCount = 1;
+    subpass_description.pColorAttachments = &attachment_ref;
+
+    vk::RenderPassCreateInfo render_pass_info = {};
+    render_pass_info.attachmentCount = 1;
+    render_pass_info.pAttachments = &color_attachment;
+    render_pass_info.subpassCount = 1;
+    render_pass_info.pSubpasses = &subpass_description;
+
+    vk::RenderPass render_pass = device.createRenderPass(render_pass_info);
+
+    vk::GraphicsPipelineCreateInfo pipeline_info = {};
+    pipeline_info.stageCount = 2;
+    pipeline_info.pStages = pipeline_shaders.data();
+    pipeline_info.pVertexInputState = &vertex_input_info;
+    pipeline_info.pInputAssemblyState = &input_assembly_info;
+    pipeline_info.pViewportState = &viewport_info;
+    pipeline_info.pRasterizationState = &raster_info;
+    pipeline_info.pMultisampleState = &multisampling_info;
+    pipeline_info.pColorBlendState = &color_blend_info;
+    pipeline_info.layout = pipeline_layout;
+    pipeline_info.renderPass = render_pass;
+    pipeline_info.subpass = 0;
+    pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
+    pipeline_info.basePipelineIndex = -1;
+
+    auto pipeline_result = device.createGraphicsPipeline(VK_NULL_HANDLE, pipeline_info);
+
+    if (pipeline_result.result != vk::Result::eSuccess)
+    {
+        std::println("Pipeline creation failed!");
+        return -1;
+    }
+    vk::Pipeline pipeline = pipeline_result.value;
+    std::println("Pipeline creation success!");
+
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+    }
+
+    device.destroyPipeline(pipeline);
+    device.destroyRenderPass(render_pass);
+    device.destroyPipelineLayout(pipeline_layout);
+    device.destroyShaderModule(vertex_module);
+    device.destroyShaderModule(fragment_module);
+    for (auto &image: image_views)
+    {
+        device.destroyImageView(image);
     }
     device.destroySwapchainKHR(swapchain);
     instance.destroySurfaceKHR(surface);
