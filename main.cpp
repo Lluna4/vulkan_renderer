@@ -33,9 +33,10 @@ GLFWwindow *create_window(int width, int height, const char *title)
     return window;
 }
 
+
 int main()
 {
-    GLFWwindow *window = create_window(800, 800, "hello");
+    GLFWwindow *window = create_window(1000, 800, "hello");
 
     if (!window)
         return -1;
@@ -114,6 +115,8 @@ int main()
     vk::DeviceCreateInfo device_info = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), 1, &queue_info, 0, nullptr, 1, device_extension_names, &device_features);
 
     vk::Device device = selected_physical_device.createDevice(device_info);
+
+    vk::Queue graphics_queue = device.getQueue(graphics_queue_index, 0);
 
     VkSurfaceKHR raw_surface;
     glfwCreateWindowSurface(instance, window, nullptr, &raw_surface);
@@ -238,7 +241,7 @@ int main()
     raster_info.depthClampEnable = VK_FALSE;
     raster_info.polygonMode = vk::PolygonMode::eFill;
     raster_info.lineWidth = 1.0f;
-    raster_info.cullMode = vk::CullModeFlagBits::eBack;
+    raster_info.cullMode = vk::CullModeFlagBits::eNone;
     raster_info.frontFace = vk::FrontFace::eClockwise;
     raster_info.depthBiasEnable = VK_FALSE;
 
@@ -248,6 +251,7 @@ int main()
 
     vk::PipelineColorBlendAttachmentState color_blend_attachment = vk::PipelineColorBlendAttachmentState(VK_FALSE);
     vk::PipelineColorBlendStateCreateInfo color_blend_info = {};
+    color_blend_attachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
     color_blend_info.logicOpEnable = VK_FALSE;
     color_blend_info.attachmentCount = 1;
     color_blend_info.pAttachments = &color_blend_attachment;
@@ -258,7 +262,7 @@ int main()
 
     vk::AttachmentDescription color_attachment = vk::AttachmentDescription(vk::AttachmentDescriptionFlags(), 
                                                                             format.format, vk::SampleCountFlagBits::e1,
-                                                                            vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore,
+                                                                            vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore,
                                                                             vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare,
                                                                             vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR);
     vk::AttachmentReference attachment_ref = vk::AttachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal);
@@ -267,11 +271,19 @@ int main()
     subpass_description.colorAttachmentCount = 1;
     subpass_description.pColorAttachments = &attachment_ref;
 
+    vk::SubpassDependency subpass_dependency = {};
+    subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    subpass_dependency.dstSubpass = 0;
+    subpass_dependency.dstStageMask = vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
     vk::RenderPassCreateInfo render_pass_info = {};
     render_pass_info.attachmentCount = 1;
     render_pass_info.pAttachments = &color_attachment;
     render_pass_info.subpassCount = 1;
     render_pass_info.pSubpasses = &subpass_description;
+    render_pass_info.dependencyCount = 1;
+    render_pass_info.pDependencies = &subpass_dependency;
 
     vk::RenderPass render_pass = device.createRenderPass(render_pass_info);
 
@@ -300,11 +312,97 @@ int main()
     vk::Pipeline pipeline = pipeline_result.value;
     std::println("Pipeline creation success!");
 
+
+    std::vector<vk::Framebuffer> framebuffers;
+
+    for (auto &view: image_views)
+    {
+        vk::FramebufferCreateInfo framebuffer_info = vk::FramebufferCreateInfo(vk::FramebufferCreateFlags(),
+                                                                        render_pass, view, framebuffer_extension.width,
+                                                                        framebuffer_extension.height, 1);
+        framebuffers.push_back(device.createFramebuffer(framebuffer_info));
+    }
+
+
+    vk::CommandPoolCreateInfo command_pool_info = {};
+    command_pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+    command_pool_info.queueFamilyIndex = graphics_queue_index;
+    vk::CommandPool command_pool = device.createCommandPool(command_pool_info);
+
+    vk::CommandBufferAllocateInfo cmd_alloc_info = vk::CommandBufferAllocateInfo(command_pool, 
+                                                                                vk::CommandBufferLevel::ePrimary,
+                                                                                1);
+    auto command_buffers = device.allocateCommandBuffers(cmd_alloc_info);
+
+    vk::SemaphoreCreateInfo semaphore_info = vk::SemaphoreCreateInfo();
+    vk::FenceCreateInfo fence_info = vk::FenceCreateInfo();
+    fence_info.flags = vk::FenceCreateFlagBits::eSignaled;
+    vk::Semaphore image_semaphore = device.createSemaphore(semaphore_info);
+    vk::Semaphore render_semaphore = device.createSemaphore(semaphore_info);
+    vk::Fence next_frame_fence = device.createFence(fence_info);
+    
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+        device.waitForFences(next_frame_fence, VK_TRUE, UINT64_MAX);
+        device.resetFences(next_frame_fence);
+        uint32_t image_index = device.acquireNextImageKHR(swapchain, UINT64_MAX, image_semaphore).value;
+        vkResetCommandBuffer(command_buffers[0], 0);
+
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        
+        if (vkBeginCommandBuffer(command_buffers[0], &begin_info) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Command buffer creation failed!");
+        }
+        vk::ClearValue clear_color = vk::ClearValue({0.0f, 0.0f, 0.0f, 1.0f});
+        vk::Rect2D render_area = {{0, 0}, framebuffer_extension};
+        vk::RenderPassBeginInfo render_pass_begin = vk::RenderPassBeginInfo(render_pass, framebuffers[image_index],
+                                                                            render_area, 1, &clear_color);
+        command_buffers[0].beginRenderPass(render_pass_begin, vk::SubpassContents::eInline);
+        command_buffers[0].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+        command_buffers[0].setViewport(0, viewport);
+        command_buffers[0].setScissor(0, scissor);
+        command_buffers[0].draw(3, 1, 0, 0);
+        command_buffers[0].endRenderPass();
+        if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Command buffer creation failed!");
+        }
+
+        vk::PipelineStageFlags flags =  vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        vk::SubmitInfo submit_info = vk::SubmitInfo();
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores = &image_semaphore;
+        submit_info.pWaitDstStageMask = &flags;
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores = &render_semaphore;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffers[0];
+
+        graphics_queue.submit(submit_info, next_frame_fence);
+
+        vk::PresentInfoKHR present_info = {};
+        present_info.waitSemaphoreCount = 1;
+        present_info.pWaitSemaphores = &render_semaphore;
+        present_info.swapchainCount = 1;
+        present_info.pSwapchains = &swapchain;
+        present_info.pImageIndices = &image_index;
+
+        graphics_queue.presentKHR(present_info);
     }
 
+    for (auto &framebuffer: framebuffers)
+    {
+        device.destroyFramebuffer(framebuffer);
+    }
+
+    device.destroyFence(next_frame_fence);
+    device.destroySemaphore(render_semaphore);
+    device.destroySemaphore(image_semaphore);
+    device.destroyCommandPool(command_pool);
     device.destroyPipeline(pipeline);
     device.destroyRenderPass(render_pass);
     device.destroyPipelineLayout(pipeline_layout);
