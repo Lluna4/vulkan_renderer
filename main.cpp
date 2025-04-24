@@ -3,6 +3,13 @@
 #include <print>
 #include <vector>
 #include <fstream>
+#include <glm/glm.hpp>
+
+struct vertex
+{
+    glm::vec2 position;
+    glm::vec3 color;
+};
 
 std::vector<char> read_file(const char *filename)
 {
@@ -57,7 +64,9 @@ int main()
     extensions.push_back("VK_KHR_portability_enumeration");
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME); //Apple silicon extensions
     #endif
-    //layers.push_back("VK_LAYER_KHRONOS_validation");
+    #ifndef NDEBUG
+    layers.push_back("VK_LAYER_KHRONOS_validation");
+    #endif
     
     vk::InstanceCreateInfo createinfo = vk::InstanceCreateInfo(
         vk::InstanceCreateFlags(VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR), 
@@ -106,13 +115,15 @@ int main()
     float queue_priority = 1.0f;
     vk::DeviceQueueCreateInfo queue_info = vk::DeviceQueueCreateInfo(vk::DeviceQueueCreateFlags(), graphics_queue_index, 1, &queue_priority);
 
+    std::vector<const char *> device_extensions;
 
-    uint32_t device_extension_count = 1;
-    char *device_extension_names[device_extension_count];
-    device_extension_names[0] = (char *)"VK_KHR_swapchain";
+    device_extensions.push_back("VK_KHR_swapchain");
+    #ifdef __APPLE__
+    device_extensions.push_back("VK_KHR_portability_subset");
+    #endif
     vk::PhysicalDeviceFeatures device_features = vk::PhysicalDeviceFeatures();
 
-    vk::DeviceCreateInfo device_info = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), 1, &queue_info, 0, nullptr, 1, device_extension_names, &device_features);
+    vk::DeviceCreateInfo device_info = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), 1, &queue_info, 0, nullptr, device_extensions.size(), device_extensions.data(), &device_features);
 
     vk::Device device = selected_physical_device.createDevice(device_info);
 
@@ -225,7 +236,31 @@ int main()
 
     std::vector<vk::PipelineShaderStageCreateInfo> pipeline_shaders = {vertex_stage_info, fragment_stage_info};
 
+    vk::VertexInputBindingDescription binding_description = {};
+    binding_description.binding = 0;
+    binding_description.stride = sizeof(vertex);
+    binding_description.inputRate = vk::VertexInputRate::eVertex;
+
+    vk::VertexInputAttributeDescription att_description_pos = {};
+    att_description_pos.binding = 0;
+    att_description_pos.location = 0;
+    att_description_pos.format = vk::Format::eR32G32Sfloat;
+    att_description_pos.offset = offsetof(vertex, position);
+
+    vk::VertexInputAttributeDescription att_description_color = {};
+    att_description_color.binding = 0;
+    att_description_color.location = 1;
+    att_description_color.format = vk::Format::eR32G32B32Sfloat;
+    att_description_color.offset = offsetof(vertex, color);
+
+    std::vector<vk::VertexInputAttributeDescription> att_descriptions = {att_description_pos, att_description_color};
     vk::PipelineVertexInputStateCreateInfo vertex_input_info = {};
+    vertex_input_info.vertexAttributeDescriptionCount = 2;
+    vertex_input_info.vertexBindingDescriptionCount = 1;
+    vertex_input_info.pVertexBindingDescriptions = &binding_description;
+    vertex_input_info.pVertexAttributeDescriptions = att_descriptions.data();
+
+
     vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo(vk::PipelineInputAssemblyStateCreateFlags(), 
                                                                                                             vk::PrimitiveTopology::eTriangleList, VK_FALSE);
     vk::Viewport viewport = vk::Viewport(0.0f, 0.0f, 
@@ -274,6 +309,7 @@ int main()
     vk::SubpassDependency subpass_dependency = {};
     subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     subpass_dependency.dstSubpass = 0;
+    subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     subpass_dependency.dstStageMask = vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
     subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 
@@ -323,6 +359,41 @@ int main()
         framebuffers.push_back(device.createFramebuffer(framebuffer_info));
     }
 
+    std::vector<vertex> vertices = {
+        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    };
+
+
+    vk::BufferCreateInfo buffer_info = vk::BufferCreateInfo(vk::BufferCreateFlags(), sizeof(vertices[0]) * vertices.size(), vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive);
+    vk::Buffer vertex_buffer = device.createBuffer(buffer_info);
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, vertex_buffer, &memory_requirements);
+    vk::PhysicalDeviceMemoryProperties memory_propierties = selected_physical_device.getMemoryProperties();
+
+    int propierty_index = -1;
+    for (int i = 0; i < memory_propierties.memoryTypeCount; i++)
+    {
+        if (memory_propierties.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlags(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent))
+        {
+            propierty_index = i;
+            break;
+        }
+    }
+    if (propierty_index == -1)
+    {
+        throw std::runtime_error("Didnt find a suitable memory");
+    }
+
+    vk::MemoryAllocateInfo alloc_info = vk::MemoryAllocateInfo(memory_requirements.size, propierty_index);
+
+    vk::DeviceMemory vertex_buffer_memory = device.allocateMemory(alloc_info);
+    device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
+
+    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, buffer_info.size);
+    memcpy(data, vertices.data(), buffer_info.size);
+    device.unmapMemory(vertex_buffer_memory);
 
     vk::CommandPoolCreateInfo command_pool_info = {};
     command_pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
@@ -361,10 +432,13 @@ int main()
         vk::Rect2D render_area = {{0, 0}, framebuffer_extension};
         vk::RenderPassBeginInfo render_pass_begin = vk::RenderPassBeginInfo(render_pass, framebuffers[image_index],
                                                                             render_area, 1, &clear_color);
+        vk::DeviceSize offset = 0;
         command_buffers[0].beginRenderPass(render_pass_begin, vk::SubpassContents::eInline);
         command_buffers[0].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-        command_buffers[0].setViewport(0, viewport);
-        command_buffers[0].setScissor(0, scissor);
+        //command_buffers[0].setViewport(0, viewport);
+        //command_buffers[0].setScissor(0, scissor);
+
+        command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
         command_buffers[0].draw(3, 1, 0, 0);
         command_buffers[0].endRenderPass();
         if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
@@ -393,12 +467,13 @@ int main()
 
         graphics_queue.presentKHR(present_info);
     }
-
+    device.waitIdle();
+    device.destroyBuffer(vertex_buffer);
+    device.freeMemory(vertex_buffer_memory);
     for (auto &framebuffer: framebuffers)
     {
         device.destroyFramebuffer(framebuffer);
     }
-
     device.destroyFence(next_frame_fence);
     device.destroySemaphore(render_semaphore);
     device.destroySemaphore(image_semaphore);
