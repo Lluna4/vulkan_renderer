@@ -40,6 +40,24 @@ GLFWwindow *create_window(int width, int height, const char *title)
     return window;
 }
 
+vk::PhysicalDevice select_physical_device(std::vector<vk::PhysicalDevice> devices)
+{
+    if (devices.size() == 1)
+        return devices[0];
+    
+    vk::PhysicalDevice selected_physical_device;
+    for (auto device: devices)
+    {
+        vk::PhysicalDeviceProperties device_propierties = device.getProperties();
+        if (device_propierties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+        {
+            selected_physical_device = device;
+            break;
+        }
+        selected_physical_device = device;
+    }
+    return selected_physical_device; 
+}
 
 int main()
 {
@@ -74,31 +92,8 @@ int main()
         extensions.size(), extensions.data());
     vk::Instance instance = vk::createInstance(createinfo);
 
-    uint32_t count = 0;
-    VkResult res = vkEnumeratePhysicalDevices(instance, &count, nullptr);
-    if (res != VK_SUCCESS)
-    {
-        std::println("Enumerating physical devices failed!");
-        return -1;
-    }
-    std::println("Physical devices available {}", count);
-    std::vector<VkPhysicalDevice> devices;
-    devices.resize(count);
-    VkResult res2 = vkEnumeratePhysicalDevices(instance, &count, devices.data());
-    if (res2 != VK_SUCCESS)
-    {
-        std::println("Enumerating physical devices failed!");
-        return -1;
-    }
-
-    vk::PhysicalDevice selected_physical_device;
-    for (auto device: devices)
-    {
-        VkPhysicalDeviceProperties dev_prop = {};
-        vkGetPhysicalDeviceProperties(device, &dev_prop);
-        std::println("{}", dev_prop.deviceName);
-        selected_physical_device = device;
-    }
+    std::vector<vk::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
+    vk::PhysicalDevice selected_physical_device = select_physical_device(devices);
 
     std::vector<vk::QueueFamilyProperties> queue_families = selected_physical_device.getQueueFamilyProperties();
 
@@ -262,7 +257,7 @@ int main()
 
 
     vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo(vk::PipelineInputAssemblyStateCreateFlags(), 
-                                                                                                            vk::PrimitiveTopology::eTriangleList, VK_FALSE);
+                                                                                                            vk::PrimitiveTopology::eTriangleFan, VK_FALSE);
     vk::Viewport viewport = vk::Viewport(0.0f, 0.0f, 
                                         framebuffer_extension.width, framebuffer_extension.height,
                                         0.0f, 1.0f);
@@ -360,7 +355,8 @@ int main()
     }
 
     std::vector<vertex> vertices = {
-        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
         {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
         {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
     };
@@ -392,8 +388,8 @@ int main()
     device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
 
     char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, buffer_info.size);
-    memcpy(data, vertices.data(), buffer_info.size);
-    device.unmapMemory(vertex_buffer_memory);
+    
+    
 
     vk::CommandPoolCreateInfo command_pool_info = {};
     command_pool_info.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
@@ -415,6 +411,7 @@ int main()
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+        memcpy(data, vertices.data(), buffer_info.size);
         device.waitForFences(next_frame_fence, VK_TRUE, UINT64_MAX);
         device.resetFences(next_frame_fence);
         uint32_t image_index = device.acquireNextImageKHR(swapchain, UINT64_MAX, image_semaphore).value;
@@ -439,7 +436,7 @@ int main()
         //command_buffers[0].setScissor(0, scissor);
 
         command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
-        command_buffers[0].draw(3, 1, 0, 0);
+        command_buffers[0].draw(4, 1, 0, 0);
         command_buffers[0].endRenderPass();
         if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
         {
@@ -467,6 +464,7 @@ int main()
 
         graphics_queue.presentKHR(present_info);
     }
+    device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
     device.destroyBuffer(vertex_buffer);
     device.freeMemory(vertex_buffer_memory);
