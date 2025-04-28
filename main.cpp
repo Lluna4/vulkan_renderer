@@ -1,9 +1,14 @@
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 #include <print>
+#include <filesystem>
 #include <vector>
 #include <fstream>
 #include <glm/glm.hpp>
+
+bool skip_rendering = false;
+vk::SurfaceFormatKHR format;
+vk::Extent2D framebuffer_extension;
 
 struct vertex
 {
@@ -57,6 +62,71 @@ vk::PhysicalDevice select_physical_device(std::vector<vk::PhysicalDevice> device
         selected_physical_device = device;
     }
     return selected_physical_device; 
+}
+
+vk::SwapchainKHR create_swapchain(vk::PhysicalDevice phy_device, vk::SurfaceKHR surface, GLFWwindow *window, vk::Device device)
+{
+    vk::SurfaceCapabilitiesKHR surface_capabilities = phy_device.getSurfaceCapabilitiesKHR(surface);
+    int width = 0;
+    int height = 0;
+    if (surface_capabilities.currentExtent.height == UINT32_MAX || surface_capabilities.currentExtent.width == UINT32_MAX)
+    {
+        glfwGetFramebufferSize(window, &width, &height);
+        width = std::clamp((uint32_t)width, surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width);
+        height = std::clamp((uint32_t)height, surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
+    }
+    else
+    {
+        width = surface_capabilities.currentExtent.width;
+        height = surface_capabilities.currentExtent.height;
+    }
+    
+    
+    if (width == 0 && height == 0)
+    {
+        skip_rendering = true;
+    }
+    framebuffer_extension = vk::Extent2D(width, height);
+    std::println("Extents width {} height {}", width, height);
+
+    std::vector<vk::SurfaceFormatKHR> surface_formats = phy_device.getSurfaceFormatsKHR(surface);
+
+    for (auto form: surface_formats)
+    {
+        if (form.format == vk::Format::eB8G8R8A8Srgb && form.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+        {
+            format = form;
+            break;
+        }
+    }
+
+    std::vector<vk::PresentModeKHR> present_modes = phy_device.getSurfacePresentModesKHR(surface);
+    vk::PresentModeKHR mode = vk::PresentModeKHR::eFifo;
+    if (std::find(present_modes.begin(), present_modes.end(), vk::PresentModeKHR::eFifoRelaxed) != present_modes.end())
+    {
+        mode = vk::PresentModeKHR::eFifoRelaxed;
+        std::println("Selected relaxed FIFO");
+    }
+    else 
+    {
+        std::println("Selected FIFO");
+    }
+    
+    vk::SwapchainCreateInfoKHR swapchain_info = vk::SwapchainCreateInfoKHR(vk::SwapchainCreateFlagsKHR(), surface, 2, format.format, format.colorSpace, framebuffer_extension,
+        1, vk::ImageUsageFlagBits::eColorAttachment, vk::SharingMode::eExclusive);
+    swapchain_info.preTransform = surface_capabilities.currentTransform;
+    swapchain_info.presentMode = mode;
+    swapchain_info.clipped = VK_TRUE;
+    swapchain_info.oldSwapchain = vk::SwapchainKHR(nullptr);
+    swapchain_info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+
+
+    return device.createSwapchainKHR(swapchain_info);
+}
+
+void compile_shader(const char *filename)
+{
+    system(std::format("glslc {} -o {}.spv", filename, filename).c_str());
 }
 
 int main()
@@ -135,54 +205,9 @@ int main()
     else
         std::println("Surface unsupported!");
 
-    vk::SurfaceCapabilitiesKHR surface_capabilities = selected_physical_device.getSurfaceCapabilitiesKHR(surface);
-    int width = 0;
-    int height = 0;
-    if (surface_capabilities.currentExtent.height == UINT32_MAX || surface_capabilities.currentExtent.width == UINT32_MAX)
-    {
-        glfwGetFramebufferSize(window, &width, &height);
-        width = std::clamp((uint32_t)width, surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width);
-        height = std::clamp((uint32_t)height, surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
-    }
-    else
-    {
-        width = surface_capabilities.currentExtent.width;
-        height = surface_capabilities.currentExtent.height;
-    }
-    vk::Extent2D framebuffer_extension = vk::Extent2D(width, height);
-    std::println("Extents width {} height {}", width, height);
-
-    std::vector<vk::SurfaceFormatKHR> surface_formats = selected_physical_device.getSurfaceFormatsKHR(surface);
-
-    vk::SurfaceFormatKHR format;
-    for (auto form: surface_formats)
-    {
-        if (form.format == vk::Format::eB8G8R8A8Srgb && form.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-        {
-            format = form;
-            break;
-        }
-    }
-
-    std::vector<vk::PresentModeKHR> present_modes = selected_physical_device.getSurfacePresentModesKHR(surface);
-    vk::PresentModeKHR mode = vk::PresentModeKHR::eFifo;
-    if (std::find(present_modes.begin(), present_modes.end(), vk::PresentModeKHR::eFifoRelaxed) != present_modes.end())
-    {
-        mode = vk::PresentModeKHR::eFifoRelaxed;
-        std::println("Selected relaxed FIFO");
-    }
     
-    vk::SwapchainCreateInfoKHR swapchain_info = vk::SwapchainCreateInfoKHR(vk::SwapchainCreateFlagsKHR(), surface, 2, format.format, format.colorSpace, framebuffer_extension,
-        1, vk::ImageUsageFlagBits::eColorAttachment, vk::SharingMode::eExclusive);
-    swapchain_info.preTransform = surface_capabilities.currentTransform;
-    swapchain_info.presentMode = mode;
-    swapchain_info.clipped = VK_TRUE;
-    swapchain_info.oldSwapchain = vk::SwapchainKHR(nullptr);
-    swapchain_info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-
-
-    vk::SwapchainKHR swapchain = device.createSwapchainKHR(swapchain_info);
-
+    vk::SwapchainKHR swapchain = create_swapchain(selected_physical_device, surface, window, device);
+    
     std::vector<vk::Image> images = device.getSwapchainImagesKHR(swapchain);
     std::println("Got {} images from swapchain", images.size());
 
@@ -205,10 +230,15 @@ int main()
 
         image_views.push_back(device.createImageView(image_view_info));
     }
-
-    
-    std::vector<char> vertex_shader = read_file("../shaders/vertex.spv");
-    std::vector<char> fragment_shader = read_file("../shaders/fragment.spv");
+    if (!std::filesystem::exists("../shaders/vertex.vert.spv") && !std::filesystem::exists("../shaders/fragment.frag.spv"))
+    {    
+        std::println("Compiling shaders");
+        compile_shader("../shaders/vertex.vert");
+        compile_shader("../shaders/fragment.frag");
+        std::println("Shaders compiled");
+    }
+    std::vector<char> vertex_shader = read_file("../shaders/vertex.vert.spv");
+    std::vector<char> fragment_shader = read_file("../shaders/fragment.frag.spv");
     
     vk::ShaderModuleCreateInfo vertex_shader_info = vk::ShaderModuleCreateInfo(vk::ShaderModuleCreateFlags(), vertex_shader.size());
     vertex_shader_info.pCode = (const uint32_t*)(vertex_shader.data());
@@ -355,10 +385,10 @@ int main()
     }
 
     std::vector<vertex> vertices = {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+        {{-0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
+        {{0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
+        {{0.1f, 0.1f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
 
 
@@ -388,7 +418,7 @@ int main()
     device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
 
     char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, buffer_info.size);
-    
+    memcpy(data, vertices.data(), buffer_info.size);
     
 
     vk::CommandPoolCreateInfo command_pool_info = {};
@@ -407,36 +437,50 @@ int main()
     vk::Semaphore image_semaphore = device.createSemaphore(semaphore_info);
     vk::Semaphore render_semaphore = device.createSemaphore(semaphore_info);
     vk::Fence next_frame_fence = device.createFence(fence_info);
-    
+    float move = 0.01;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
-        memcpy(data, vertices.data(), buffer_info.size);
-        device.waitForFences(next_frame_fence, VK_TRUE, UINT64_MAX);
+        auto res_wait = device.waitForFences(next_frame_fence, VK_TRUE, UINT64_MAX);
+        if (res_wait != vk::Result::eSuccess)
+            throw std::runtime_error("failed waiting!");
         device.resetFences(next_frame_fence);
-        uint32_t image_index = device.acquireNextImageKHR(swapchain, UINT64_MAX, image_semaphore).value;
-        vkResetCommandBuffer(command_buffers[0], 0);
-
-
-        VkCommandBufferBeginInfo begin_info{};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        
-        if (vkBeginCommandBuffer(command_buffers[0], &begin_info) != VK_SUCCESS)
+        if (skip_rendering)
+            continue;
+        auto image_result = device.acquireNextImageKHR(swapchain, UINT64_MAX, image_semaphore);
+        if (image_result.result != vk::Result::eSuccess)
         {
-            throw std::runtime_error("Command buffer creation failed!");
+            throw std::runtime_error("Getting next image failed!");
         }
+        uint32_t image_index = image_result.value;
+        vkResetCommandBuffer(command_buffers[0], 0);
+        for (auto &vert: vertices)
+        {
+            if (vert.position[0] > 1.0f)
+                move = -0.01;
+            else if (vert.position[0] < -1.0)
+                move = 0.01;
+            vert.position[0] += move;
+            vert.position[1] += move;
+
+        }
+        memcpy(data, vertices.data(), buffer_info.size);
+
+
+        vk::CommandBufferBeginInfo begin_info = {};
         vk::ClearValue clear_color = vk::ClearValue({0.0f, 0.0f, 0.0f, 1.0f});
         vk::Rect2D render_area = {{0, 0}, framebuffer_extension};
         vk::RenderPassBeginInfo render_pass_begin = vk::RenderPassBeginInfo(render_pass, framebuffers[image_index],
                                                                             render_area, 1, &clear_color);
         vk::DeviceSize offset = 0;
+        command_buffers[0].begin(begin_info);
         command_buffers[0].beginRenderPass(render_pass_begin, vk::SubpassContents::eInline);
         command_buffers[0].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
         //command_buffers[0].setViewport(0, viewport);
         //command_buffers[0].setScissor(0, scissor);
 
         command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
-        command_buffers[0].draw(4, 1, 0, 0);
+        command_buffers[0].draw(vertices.size(), 1, 0, 0);
         command_buffers[0].endRenderPass();
         if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
         {
@@ -462,7 +506,9 @@ int main()
         present_info.pSwapchains = &swapchain;
         present_info.pImageIndices = &image_index;
 
-        graphics_queue.presentKHR(present_info);
+        auto present_result = graphics_queue.presentKHR(present_info);
+        if (present_result != vk::Result::eSuccess)
+            throw std::runtime_error("Presenting to the graphics queue failed");
     }
     device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
