@@ -454,12 +454,12 @@ int main()
         }
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
+        if (vertices[1].position[0] > 1.0f)
+            move = -0.01;
+        else if (vertices[3].position[0] < -1.0)
+            move = 0.01;
         for (auto &vert: vertices)
         {
-            if (vert.position[0] > 1.0f)
-                move = -0.01;
-            else if (vert.position[0] < -1.0)
-                move = 0.01;
             vert.position[0] += move;
             vert.position[1] += move;
 
