@@ -478,8 +478,10 @@ int main()
     vk::Semaphore render_semaphore = device.createSemaphore(semaphore_info);
     vk::Fence next_frame_fence = device.createFence(fence_info);
     glm::vec2 pos = {0.0f, 0.0f};
-    float vel = 0.01f;
+    float vel = 0.008f;
     std::vector<vertex> render_vertices = vertices;
+    float angle = 0.0f;
+    float vel2 = 0.005f;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -497,14 +499,17 @@ int main()
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
         pos.x += vel;
+        pos.y += vel2;
         if (pos.x >= 1.0f || pos.x <= -1.0f)
             vel = -vel;
-
+        if (pos.y >= 1.0f || pos.y <= -1.0f)
+            vel2 = -vel2;
         for (int i = 0; i < vertices.size(); i++)
         {
-            render_vertices[i].position = vertices[i].position * rotate(45.0f);
+            render_vertices[i].position = vertices[i].position * rotate(angle);
             render_vertices[i].position = glm::vec2(move(pos) * glm::vec3(render_vertices[i].position, 1.0f));
         }
+        angle -= 1.0f;
         memcpy(data, render_vertices.data(), buffer_info.size);
 
 
