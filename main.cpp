@@ -10,6 +10,8 @@ bool skip_rendering = false;
 vk::SurfaceFormatKHR format;
 vk::Extent2D framebuffer_extension;
 
+std::vector<glm::vec2> identity_mat_2d = {{1, 0}, {0,1}};
+
 struct vertex
 {
     glm::vec2 position;
@@ -127,6 +129,36 @@ vk::SwapchainKHR create_swapchain(vk::PhysicalDevice phy_device, vk::SurfaceKHR 
 void compile_shader(const char *filename)
 {
     system(std::format("glslc {} -o {}.spv", filename, filename).c_str());
+}
+
+std::vector<vertex> convert_quad_to_triangles(std::vector<vertex> vertices)
+{
+    const vertex end_vertex = vertices[3];
+    vertices.pop_back();
+    vertices.push_back(vertices[0]);
+    vertices.push_back(vertices[2]);
+    vertices.push_back(end_vertex);
+    return vertices;
+}
+
+glm::mat2 rotate(float angle)
+{
+    float c = glm::cos(glm::radians(angle));
+    float s = glm::sin(glm::radians(angle));
+    glm::mat2 transform({c, s}, {-s, c});
+    return transform;
+}
+
+glm::mat2 scale(glm::vec2 scale)
+{
+    glm::mat2 transform({scale.x, 0.0f}, {0.0f, scale.y});
+    return transform;
+}
+
+glm::mat3 move(glm::vec2 pos)
+{
+    glm::mat3 transform({1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {pos.x, pos.y, 1.0f});
+    return transform;
 }
 
 int main()
@@ -287,7 +319,7 @@ int main()
 
 
     vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo(vk::PipelineInputAssemblyStateCreateFlags(), 
-                                                                                                            vk::PrimitiveTopology::eTriangleFan, VK_FALSE);
+                                                                                                            vk::PrimitiveTopology::eTriangleList, VK_FALSE);
     vk::Viewport viewport = vk::Viewport(0.0f, 0.0f, 
                                         framebuffer_extension.width, framebuffer_extension.height,
                                         0.0f, 1.0f);
@@ -390,7 +422,15 @@ int main()
         {{0.1f, 0.1f}, {0.0f, 1.0f, 0.0f}},
         {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
+    vertices = convert_quad_to_triangles(vertices);
+    glm::mat2 transform = scale({1.0, 1.0}) * rotate(0.0f);
+    glm::vec2 movement = {0.0f, 0.0f};
 
+    for (auto &[position, color] : vertices)
+    {
+        position = position + movement;
+        position = transform * position;
+    }
 
     vk::BufferCreateInfo buffer_info = vk::BufferCreateInfo(vk::BufferCreateFlags(), sizeof(vertices[0]) * vertices.size(), vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive);
     vk::Buffer vertex_buffer = device.createBuffer(buffer_info);
@@ -437,7 +477,9 @@ int main()
     vk::Semaphore image_semaphore = device.createSemaphore(semaphore_info);
     vk::Semaphore render_semaphore = device.createSemaphore(semaphore_info);
     vk::Fence next_frame_fence = device.createFence(fence_info);
-    float move = 0.01;
+    glm::vec2 pos = {0.0f, 0.0f};
+    float vel = 0.01f;
+    std::vector<vertex> render_vertices = vertices;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -454,17 +496,16 @@ int main()
         }
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
-        if (vertices[1].position[0] > 1.0f)
-            move = -0.01;
-        else if (vertices[3].position[0] < -1.0)
-            move = 0.01;
-        for (auto &vert: vertices)
-        {
-            vert.position[0] += move;
-            vert.position[1] += move;
+        pos.x += vel;
+        if (pos.x >= 1.0f || pos.x <= -1.0f)
+            vel = -vel;
 
+        for (int i = 0; i < vertices.size(); i++)
+        {
+            render_vertices[i].position = vertices[i].position * rotate(45.0f);
+            render_vertices[i].position = glm::vec2(move(pos) * glm::vec3(render_vertices[i].position, 1.0f));
         }
-        memcpy(data, vertices.data(), buffer_info.size);
+        memcpy(data, render_vertices.data(), buffer_info.size);
 
 
         vk::CommandBufferBeginInfo begin_info = {};
