@@ -5,6 +5,8 @@
 #include <vector>
 #include <fstream>
 #include <glm/glm.hpp>
+#include <atomic>
+#include <thread>
 
 bool skip_rendering = false;
 vk::SurfaceFormatKHR format;
@@ -17,6 +19,19 @@ struct vertex
     glm::vec2 position;
     glm::vec3 color;
 };
+
+struct bounding_box
+{
+    float x;
+    float y;
+    float width;
+    float height;
+};
+
+bounding_box player;
+float velocityX = 1.0f;
+float velocityY = 0.50f;
+std::atomic_bool thread = true;
 
 std::vector<char> read_file(const char *filename)
 {
@@ -161,8 +176,38 @@ glm::mat3 move(glm::vec2 pos)
     return transform;
 }
 
+void simple_physics()
+{
+    while (thread.load() == true)
+    {
+        bool collision_x = player.x + player.width / 2 >= 1.0f || player.x - player.width / 2 <= -1.0f;
+        bool collision_y = player.y + player.height / 2 >=1.0f || player.y - player.height / 2 <= -1.0f;
+        if (collision_x)
+            velocityX = -velocityX;
+        else if (collision_y)
+            velocityY = -velocityY;
+        player.x = player.x + (velocityX * 0.002f);
+        player.y = player.y + (velocityY * 0.002f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
+void simple_physics_step(float t)
+{
+    bool collision_x = player.x + player.width / 2 >= 1.0f || player.x - player.width / 2 <= -1.0f;
+    bool collision_y = player.y + player.height / 2 >=1.0f || player.y - player.height / 2 <= -1.0f;
+    if (collision_x)
+        velocityX = -velocityX;
+    else if (collision_y)
+        velocityY = -velocityY;
+    player.x = player.x + (velocityX * t);
+    player.y = player.y + (velocityY * t);
+}
+
 int main()
 {
+    using clock = std::chrono::system_clock;
+    using ms = std::chrono::duration<double, std::milli>;
     GLFWwindow *window = create_window(1000, 800, "hello");
 
     if (!window)
@@ -477,11 +522,16 @@ int main()
     vk::Semaphore image_semaphore = device.createSemaphore(semaphore_info);
     vk::Semaphore render_semaphore = device.createSemaphore(semaphore_info);
     vk::Fence next_frame_fence = device.createFence(fence_info);
-    glm::vec2 pos = {0.0f, 0.0f};
-    float vel = 0.008f;
+    player.x = 0.0f;
+    player.y = 0.0f;
+    player.height = 0.2f;
+    player.width = 0.2f;
+    //velocityX = 0.008f;
     std::vector<vertex> render_vertices = vertices;
     float angle = 0.0f;
     float vel2 = 0.005f;
+    //std::thread phy_thread(simple_physics);
+    auto before = clock::now();
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -498,16 +548,13 @@ int main()
         }
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
-        pos.x += vel;
-        pos.y += vel2;
-        if (pos.x >= 1.0f || pos.x <= -1.0f)
-            vel = -vel;
-        if (pos.y >= 1.0f || pos.y <= -1.0f)
-            vel2 = -vel2;
+        auto time_elapsed = clock::now() - before;
+        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count());
+        before = clock::now();
         for (int i = 0; i < vertices.size(); i++)
         {
             render_vertices[i].position = vertices[i].position * rotate(angle);
-            render_vertices[i].position = glm::vec2(move(pos) * glm::vec3(render_vertices[i].position, 1.0f));
+            render_vertices[i].position = glm::vec2(move({player.x, player.y}) * glm::vec3(render_vertices[i].position, 1.0f));
         }
         angle -= 1.0f;
         memcpy(data, render_vertices.data(), buffer_info.size);
@@ -556,6 +603,8 @@ int main()
         if (present_result != vk::Result::eSuccess)
             throw std::runtime_error("Presenting to the graphics queue failed");
     }
+    thread = false;
+    //phy_thread.join();
     device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
     device.destroyBuffer(vertex_buffer);
