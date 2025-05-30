@@ -28,6 +28,11 @@ struct bounding_box
     float height;
 };
 
+struct uniform
+{
+    glm::mat4 transform;
+};
+
 bounding_box player;
 float velocityX = 1.0f;
 float velocityY = 0.50f;
@@ -156,11 +161,11 @@ std::vector<vertex> convert_quad_to_triangles(std::vector<vertex> vertices)
     return vertices;
 }
 
-glm::mat2 rotate(float angle)
+glm::mat4 rotate(float angle)
 {
     float c = glm::cos(glm::radians(angle));
     float s = glm::sin(glm::radians(angle));
-    glm::mat2 transform({c, s}, {-s, c});
+    glm::mat4 transform({c, s, 0.0f, 0.0f}, {-s, c, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f});
     return transform;
 }
 
@@ -170,9 +175,9 @@ glm::mat2 scale(glm::vec2 scale)
     return transform;
 }
 
-glm::mat3 move(glm::vec2 pos)
+glm::mat4 move(glm::vec2 pos)
 {
-    glm::mat3 transform({1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {pos.x, pos.y, 1.0f});
+    glm::mat4 transform({1.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f, 0.0f}, {pos.x, pos.y, 0.0f, 1.0f});
     return transform;
 }
 
@@ -202,6 +207,35 @@ void simple_physics_step(float t)
         velocityY = -velocityY;
     player.x = player.x + (velocityX * t);
     player.y = player.y + (velocityY * t);
+}
+
+std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, vk::PhysicalDevice selected_physical_device, vk::BufferUsageFlagBits usage, size_t size)
+{
+    vk::BufferCreateInfo buffer_info = vk::BufferCreateInfo(vk::BufferCreateFlags(), size, usage, vk::SharingMode::eExclusive);
+    vk::Buffer vertex_buffer = device.createBuffer(buffer_info);
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, vertex_buffer, &memory_requirements);
+    vk::PhysicalDeviceMemoryProperties memory_properties = selected_physical_device.getMemoryProperties();
+
+    int propierty_index = -1;
+    for (int i = 0; i < memory_properties.memoryTypeCount; i++)
+    {
+        if (memory_properties.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlags(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent))
+        {
+            propierty_index = i;
+            break;
+        }
+    }
+    if (propierty_index == -1)
+    {
+        throw std::runtime_error("Didnt find a suitable memory");
+    }
+
+    vk::MemoryAllocateInfo alloc_info = vk::MemoryAllocateInfo(memory_requirements.size, propierty_index);
+
+    vk::DeviceMemory vertex_buffer_memory = device.allocateMemory(alloc_info);
+    device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
+    return std::make_pair(vertex_buffer_memory, vertex_buffer);
 }
 
 int main()
@@ -393,9 +427,27 @@ int main()
     color_blend_info.attachmentCount = 1;
     color_blend_info.pAttachments = &color_blend_attachment;
 
+    vk::DescriptorSetLayoutBinding descriptor_binding;
+    descriptor_binding.binding = 0;
+    descriptor_binding.descriptorCount = 1;
+    descriptor_binding.descriptorType = vk::DescriptorType::eUniformBuffer;
+    descriptor_binding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+
+    vk::DescriptorSetLayoutCreateInfo descriptor_layout_info(vk::DescriptorSetLayoutCreateFlags(), 1, &descriptor_binding);
+    vk::DescriptorSetLayout descriptor_layout = device.createDescriptorSetLayout(descriptor_layout_info);
+
     vk::PipelineLayoutCreateInfo layout_info = {};
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &descriptor_layout;
     vk::PipelineLayout pipeline_layout = device.createPipelineLayout(layout_info);
 
+    uniform u{};
+    u.transform = glm::mat4(1.0f);
+    auto rec = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eUniformBuffer, sizeof(uniform));
+    vk::DeviceMemory uniform_buffer_data = rec.first;
+    vk::Buffer uniform_buffer = rec.second;
+    char *uniform_data = (char *)device.mapMemory(uniform_buffer_data, 0, sizeof(uniform));
+    memcpy(uniform_data, &u, sizeof(uniform));
 
     vk::AttachmentDescription color_attachment = vk::AttachmentDescription(vk::AttachmentDescriptionFlags(), 
                                                                             format.format, vk::SampleCountFlagBits::e1,
@@ -468,42 +520,11 @@ int main()
         {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
     vertices = convert_quad_to_triangles(vertices);
-    glm::mat2 transform = scale({1.0, 1.0}) * rotate(0.0f);
-    glm::vec2 movement = {0.0f, 0.0f};
-
-    for (auto &[position, color] : vertices)
-    {
-        position = position + movement;
-        position = transform * position;
-    }
-
-    vk::BufferCreateInfo buffer_info = vk::BufferCreateInfo(vk::BufferCreateFlags(), sizeof(vertices[0]) * vertices.size(), vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive);
-    vk::Buffer vertex_buffer = device.createBuffer(buffer_info);
-    VkMemoryRequirements memory_requirements;
-    vkGetBufferMemoryRequirements(device, vertex_buffer, &memory_requirements);
-    vk::PhysicalDeviceMemoryProperties memory_propierties = selected_physical_device.getMemoryProperties();
-
-    int propierty_index = -1;
-    for (int i = 0; i < memory_propierties.memoryTypeCount; i++)
-    {
-        if (memory_propierties.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlags(vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent))
-        {
-            propierty_index = i;
-            break;
-        }
-    }
-    if (propierty_index == -1)
-    {
-        throw std::runtime_error("Didnt find a suitable memory");
-    }
-
-    vk::MemoryAllocateInfo alloc_info = vk::MemoryAllocateInfo(memory_requirements.size, propierty_index);
-
-    vk::DeviceMemory vertex_buffer_memory = device.allocateMemory(alloc_info);
-    device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
-
-    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, buffer_info.size);
-    memcpy(data, vertices.data(), buffer_info.size);
+    auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices[0]) * vertices.size());
+    vk::DeviceMemory vertex_buffer_memory = ret.first;
+    vk::Buffer vertex_buffer = ret.second;
+    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, sizeof(vertices[0]) * vertices.size());
+    memcpy(data, vertices.data(), sizeof(vertices[0]) * vertices.size());
     
 
     vk::CommandPoolCreateInfo command_pool_info = {};
@@ -515,6 +536,35 @@ int main()
                                                                                 vk::CommandBufferLevel::ePrimary,
                                                                                 1);
     auto command_buffers = device.allocateCommandBuffers(cmd_alloc_info);
+    vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eUniformBuffer, sizeof(uniform));
+    vk::DescriptorPoolCreateInfo descriptor_pool_info;
+    descriptor_pool_info.maxSets = 1;
+    descriptor_pool_info.poolSizeCount = 1;
+    descriptor_pool_info.pPoolSizes = &descriptor_pool_size;
+
+    vk::DescriptorPool descriptor_pool = device.createDescriptorPool(descriptor_pool_info);
+
+    vk::DescriptorSetAllocateInfo descriptor_set_allocate_info;
+    descriptor_set_allocate_info.descriptorPool = descriptor_pool;
+    descriptor_set_allocate_info.descriptorSetCount = 1;
+    descriptor_set_allocate_info.pSetLayouts = &descriptor_layout;
+
+    auto descriptor_sets = device.allocateDescriptorSets(descriptor_set_allocate_info);
+    vk::DescriptorSet descriptor_set = descriptor_sets[0];
+
+    vk::DescriptorBufferInfo descriptor_buffer_info;
+    descriptor_buffer_info.buffer = uniform_buffer;
+    descriptor_buffer_info.offset = 0;
+    descriptor_buffer_info.range = sizeof(uniform);
+
+    vk::WriteDescriptorSet write_descriptor;
+    write_descriptor.descriptorCount = 1;
+    write_descriptor.descriptorType = vk::DescriptorType::eUniformBuffer;
+    write_descriptor.dstBinding = 0;
+    write_descriptor.dstArrayElement = 0;
+    write_descriptor.dstSet = descriptor_set;
+    write_descriptor.pBufferInfo = &descriptor_buffer_info;
+    device.updateDescriptorSets(write_descriptor, nullptr);
 
     vk::SemaphoreCreateInfo semaphore_info = vk::SemaphoreCreateInfo();
     vk::FenceCreateInfo fence_info = vk::FenceCreateInfo();
@@ -551,13 +601,11 @@ int main()
         auto time_elapsed = clock::now() - before;
         simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count());
         before = clock::now();
-        for (int i = 0; i < vertices.size(); i++)
-        {
-            render_vertices[i].position = vertices[i].position * rotate(angle);
-            render_vertices[i].position = glm::vec2(move({player.x, player.y}) * glm::vec3(render_vertices[i].position, 1.0f));
-        }
+        u.transform = move({player.x, player.y}) * rotate(angle);
+        memcpy(uniform_data, &u, sizeof(uniform));
+
         angle -= 1.0f;
-        memcpy(data, render_vertices.data(), buffer_info.size);
+        memcpy(data, render_vertices.data(), sizeof(vertices[0]) * vertices.size());
 
 
         vk::CommandBufferBeginInfo begin_info = {};
@@ -571,7 +619,7 @@ int main()
         command_buffers[0].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
         //command_buffers[0].setViewport(0, viewport);
         //command_buffers[0].setScissor(0, scissor);
-
+        command_buffers[0].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, descriptor_sets, nullptr);
         command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
         command_buffers[0].draw(vertices.size(), 1, 0, 0);
         command_buffers[0].endRenderPass();
@@ -607,6 +655,8 @@ int main()
     //phy_thread.join();
     device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
+    device.destroyDescriptorPool(descriptor_pool);
+    device.destroyDescriptorSetLayout(descriptor_layout);
     device.destroyBuffer(vertex_buffer);
     device.freeMemory(vertex_buffer_memory);
     for (auto &framebuffer: framebuffers)
