@@ -1,3 +1,5 @@
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 #include <print>
@@ -5,6 +7,7 @@
 #include <vector>
 #include <fstream>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <atomic>
 #include <thread>
 
@@ -17,6 +20,12 @@ std::vector<glm::vec2> identity_mat_2d = {{1, 0}, {0,1}};
 struct vertex
 {
     glm::vec2 position;
+    glm::vec3 color;
+};
+
+struct vertex_3d
+{
+    glm::vec3 position;
     glm::vec3 color;
 };
 
@@ -161,6 +170,16 @@ std::vector<vertex> convert_quad_to_triangles(std::vector<vertex> vertices)
     return vertices;
 }
 
+std::vector<vertex_3d> convert_quad_to_triangles(std::vector<vertex_3d> vertices)
+{
+    const vertex_3d end_vertex = vertices[3];
+    vertices.pop_back();
+    vertices.push_back(vertices[0]);
+    vertices.push_back(vertices[2]);
+    vertices.push_back(end_vertex);
+    return vertices;
+}
+
 glm::mat4 rotate(float angle)
 {
     float c = glm::cos(glm::radians(angle));
@@ -237,6 +256,54 @@ std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, 
     device.bindBufferMemory(vertex_buffer, vertex_buffer_memory, 0);
     return std::make_pair(vertex_buffer_memory, vertex_buffer);
 }
+
+std::pair<vk::DeviceMemory, vk::Image> create_image(vk::Device &device, size_t width, size_t height, size_t depth, vk::Format format, vk::ImageUsageFlags usage)
+{
+    vk::Extent3D extent(width, height, depth);
+    vk::ImageCreateInfo image_create_info(vk::ImageCreateFlags(), vk::ImageType::e2D, format, extent, 1,
+                                            1, vk::SampleCountFlagBits::e1, vk::ImageTiling::eOptimal,
+                                            usage);
+    vk::Image image = device.createImage(image_create_info);
+
+    vk::MemoryRequirements memory_requirements;
+    device.getImageMemoryRequirements(image, &memory_requirements);
+    vk::MemoryAllocateInfo memory_allocate_info(memory_requirements.size, 0x0);
+    vk::DeviceMemory memory = device.allocateMemory(memory_allocate_info, nullptr);
+    device.bindImageMemory(image, memory, 0);
+
+    return std::make_pair(memory, image);
+}
+
+vk::ImageView create_image_view(vk::Device &device, vk::Image image, vk::Format format, vk::ImageAspectFlagBits aspect)
+{
+    vk::ImageViewCreateInfo image_view_info = {};
+    image_view_info.image = image;
+    image_view_info.viewType = vk::ImageViewType::e2D;
+    image_view_info.format = format;
+    image_view_info.components.r = vk::ComponentSwizzle::eIdentity;
+    image_view_info.components.g = vk::ComponentSwizzle::eIdentity;
+    image_view_info.components.b = vk::ComponentSwizzle::eIdentity;
+    image_view_info.components.a = vk::ComponentSwizzle::eIdentity;
+    image_view_info.subresourceRange.aspectMask = aspect;
+    image_view_info.subresourceRange.baseMipLevel = 0;
+    image_view_info.subresourceRange.levelCount = 1;
+    image_view_info.subresourceRange.baseArrayLayer = 0;
+    image_view_info.subresourceRange.layerCount = 1;
+
+    return device.createImageView(image_view_info);
+}
+
+void add_quad_to_vertices(std::vector<vertex_3d> &vertices, std::vector<vertex_3d> new_quad)
+{
+    new_quad = convert_quad_to_triangles(new_quad);
+
+    for (auto vert: new_quad)
+    {
+        std::println("Vertex pos x: {}, y: {}, z: {}", vert.position.x, vert.position.y, vert.position.z);
+        vertices.push_back(vert);
+    }
+}
+
 
 int main()
 {
@@ -374,20 +441,20 @@ int main()
 
     vk::VertexInputBindingDescription binding_description = {};
     binding_description.binding = 0;
-    binding_description.stride = sizeof(vertex);
+    binding_description.stride = sizeof(vertex_3d);
     binding_description.inputRate = vk::VertexInputRate::eVertex;
 
     vk::VertexInputAttributeDescription att_description_pos = {};
     att_description_pos.binding = 0;
     att_description_pos.location = 0;
-    att_description_pos.format = vk::Format::eR32G32Sfloat;
-    att_description_pos.offset = offsetof(vertex, position);
+    att_description_pos.format = vk::Format::eR32G32B32Sfloat;
+    att_description_pos.offset = offsetof(vertex_3d, position);
 
     vk::VertexInputAttributeDescription att_description_color = {};
     att_description_color.binding = 0;
     att_description_color.location = 1;
     att_description_color.format = vk::Format::eR32G32B32Sfloat;
-    att_description_color.offset = offsetof(vertex, color);
+    att_description_color.offset = offsetof(vertex_3d, color);
 
     std::vector<vk::VertexInputAttributeDescription> att_descriptions = {att_description_pos, att_description_color};
     vk::PipelineVertexInputStateCreateInfo vertex_input_info = {};
@@ -442,7 +509,7 @@ int main()
     vk::PipelineLayout pipeline_layout = device.createPipelineLayout(layout_info);
 
     uniform u{};
-    u.transform = glm::mat4(1.0f);
+    u.transform = glm::mat4{1.0f};
     auto rec = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eUniformBuffer, sizeof(uniform));
     vk::DeviceMemory uniform_buffer_data = rec.first;
     vk::Buffer uniform_buffer = rec.second;
@@ -455,27 +522,47 @@ int main()
                                                                             vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare,
                                                                             vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR);
     vk::AttachmentReference attachment_ref = vk::AttachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal);
+
+    auto image_ret = create_image(device, framebuffer_extension.width, framebuffer_extension.height, 1,vk::Format::eD32Sfloat, vk::ImageUsageFlags(vk::ImageUsageFlagBits::eDepthStencilAttachment));
+    vk::Image depth_image = image_ret.second;
+    vk::DeviceMemory depht_image_memory = image_ret.first;
+    vk::ImageView depth_image_view = create_image_view(device, depth_image, vk::Format::eD32Sfloat, vk::ImageAspectFlagBits::eDepth);
+    vk::AttachmentDescription depth_attachment_desc(vk::AttachmentDescriptionFlags(), vk::Format::eD32Sfloat,
+        vk::SampleCountFlagBits::e1, vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eDontCare,
+        vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    vk::AttachmentReference depth_attachment_ref(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
     vk::SubpassDescription subpass_description = {};
     subpass_description.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass_description.colorAttachmentCount = 1;
     subpass_description.pColorAttachments = &attachment_ref;
+    subpass_description.pDepthStencilAttachment = &depth_attachment_ref;
 
     vk::SubpassDependency subpass_dependency = {};
     subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     subpass_dependency.dstSubpass = 0;
-    subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    subpass_dependency.dstStageMask = vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-    subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    subpass_dependency.dstStageMask = vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests);
+    subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
 
+    std::vector<vk::AttachmentDescription> attachments = {color_attachment, depth_attachment_desc};
     vk::RenderPassCreateInfo render_pass_info = {};
-    render_pass_info.attachmentCount = 1;
-    render_pass_info.pAttachments = &color_attachment;
+    render_pass_info.attachmentCount = attachments.size();
+    render_pass_info.pAttachments = attachments.data();
     render_pass_info.subpassCount = 1;
     render_pass_info.pSubpasses = &subpass_description;
     render_pass_info.dependencyCount = 1;
     render_pass_info.pDependencies = &subpass_dependency;
 
     vk::RenderPass render_pass = device.createRenderPass(render_pass_info);
+
+    vk::PipelineDepthStencilStateCreateInfo depht_stencil_info;
+    depht_stencil_info.depthTestEnable = VK_TRUE;
+    depht_stencil_info.depthWriteEnable = VK_TRUE;
+    depht_stencil_info.depthCompareOp = vk::CompareOp::eLessOrEqual;
+    depht_stencil_info.depthBoundsTestEnable = VK_FALSE;
+    depht_stencil_info.stencilTestEnable = VK_FALSE;
 
     vk::GraphicsPipelineCreateInfo pipeline_info = {};
     pipeline_info.stageCount = 2;
@@ -486,6 +573,7 @@ int main()
     pipeline_info.pRasterizationState = &raster_info;
     pipeline_info.pMultisampleState = &multisampling_info;
     pipeline_info.pColorBlendState = &color_blend_info;
+    pipeline_info.pDepthStencilState = &depht_stencil_info;
     pipeline_info.layout = pipeline_layout;
     pipeline_info.renderPass = render_pass;
     pipeline_info.subpass = 0;
@@ -507,19 +595,54 @@ int main()
 
     for (auto &view: image_views)
     {
+        std::vector<vk::ImageView> view_attachments = {view, depth_image_view};
         vk::FramebufferCreateInfo framebuffer_info = vk::FramebufferCreateInfo(vk::FramebufferCreateFlags(),
                                                                         render_pass, view, framebuffer_extension.width,
                                                                         framebuffer_extension.height, 1);
+        framebuffer_info.attachmentCount = view_attachments.size();
+        framebuffer_info.pAttachments = view_attachments.data();
         framebuffers.push_back(device.createFramebuffer(framebuffer_info));
     }
 
-    std::vector<vertex> vertices = {
-        {{-0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.1f, 0.1f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
+    std::vector<vertex_3d> vertices;
+
+    std::vector<vertex_3d> front_quad
+    {
+        {{-0.2f, -0.2f,  0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.0f, -0.2f,  0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.0f,  0.0f,  0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{-0.2f,  0.0f,  0.0f}, {1.0f, 0.0f, 0.0f}}
     };
-    vertices = convert_quad_to_triangles(vertices);
+    add_quad_to_vertices(vertices, front_quad);
+
+    std::vector<vertex_3d> back_quad
+    {
+            {{-0.15f, -0.15f,  0.2f}, {1.0f, 0.0f, 1.0f}},
+            {{ 0.05f, -0.15f,  0.2f}, {1.0f, 0.0f, 1.0f}},
+            {{ 0.05f,  0.05f,  0.2f}, {1.0f, 0.0f, 1.0f}},
+            {{-0.15f,  0.05f,  0.2f}, {1.0f, 0.0f, 1.0f}}
+    };
+    add_quad_to_vertices(vertices, back_quad);
+
+    std::vector<vertex_3d> right_quad
+    {
+                {{0.0f, -0.2f,  0.0f}, {0.0f, 1.0f, 0.0f}},
+                {{ 0.05f, -0.15f,  0.2f}, {0.0f, 1.0f, 0.0f}},
+                {{ 0.05f,  0.05f,  0.2f}, {0.0f, 1.0f, 0.0f}},
+                {{0.0f,  0.0f,  0.0f}, {0.0f, 1.0f, 0.0f}}
+    };
+    add_quad_to_vertices(vertices, right_quad);
+
+    std::vector<vertex_3d> bottom_quad
+    {
+            {front_quad[3].position, {1.0f, 1.0f, 0.0f}},
+            {front_quad[2].position, {1.0f, 1.0f, 0.0f}},
+            {back_quad[2].position, {1.0f, 1.0f, 0.0f}},
+            {back_quad[3].position, {1.0f, 1.0f, 0.0f}}
+    };
+    std::println("Bottom quad");
+    add_quad_to_vertices(vertices, bottom_quad);
+
     auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices[0]) * vertices.size());
     vk::DeviceMemory vertex_buffer_memory = ret.first;
     vk::Buffer vertex_buffer = ret.second;
@@ -536,6 +659,7 @@ int main()
                                                                                 vk::CommandBufferLevel::ePrimary,
                                                                                 1);
     auto command_buffers = device.allocateCommandBuffers(cmd_alloc_info);
+
     vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eUniformBuffer, sizeof(uniform));
     vk::DescriptorPoolCreateInfo descriptor_pool_info;
     descriptor_pool_info.maxSets = 1;
@@ -577,7 +701,7 @@ int main()
     player.height = 0.2f;
     player.width = 0.2f;
     //velocityX = 0.008f;
-    std::vector<vertex> render_vertices = vertices;
+    std::vector<vertex_3d> render_vertices = vertices;
     float angle = 0.0f;
     float vel2 = 0.005f;
     //std::thread phy_thread(simple_physics);
@@ -601,18 +725,22 @@ int main()
         auto time_elapsed = clock::now() - before;
         simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count());
         before = clock::now();
-        u.transform = move({player.x, player.y}) * rotate(angle);
-        memcpy(uniform_data, &u, sizeof(uniform));
+
+        //u.transform = glm::rotate(u.transform, 0.01f, glm::vec3(1.0f, 0.0f, 1.0f));
+        //u.transform = move({player.x, player.y}) * rotate(angle);
+        //memcpy(uniform_data, &u, sizeof(uniform));
 
         angle -= 1.0f;
         memcpy(data, render_vertices.data(), sizeof(vertices[0]) * vertices.size());
 
 
         vk::CommandBufferBeginInfo begin_info = {};
-        vk::ClearValue clear_color = vk::ClearValue({0.0f, 0.0f, 0.0f, 1.0f});
+        std::array<vk::ClearValue, 2> clear_values;
+        clear_values[0].color = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        clear_values[1].depthStencil = {{1.0f, 0}};
         vk::Rect2D render_area = {{0, 0}, framebuffer_extension};
         vk::RenderPassBeginInfo render_pass_begin = vk::RenderPassBeginInfo(render_pass, framebuffers[image_index],
-                                                                            render_area, 1, &clear_color);
+                                                                            render_area, clear_values.size(), clear_values.data());
         vk::DeviceSize offset = 0;
         command_buffers[0].begin(begin_info);
         command_buffers[0].beginRenderPass(render_pass_begin, vk::SubpassContents::eInline);
@@ -655,6 +783,11 @@ int main()
     //phy_thread.join();
     device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
+    device.freeMemory(uniform_buffer_data);
+    device.freeMemory(depht_image_memory);
+    device.destroyBuffer(uniform_buffer);
+    device.destroyImageView(depth_image_view);
+    device.destroyImage(depth_image);
     device.destroyDescriptorPool(descriptor_pool);
     device.destroyDescriptorSetLayout(descriptor_layout);
     device.destroyBuffer(vertex_buffer);
