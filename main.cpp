@@ -26,6 +26,10 @@ struct bounding_box
     float y;
     float width;
     float height;
+    float velocityX;
+    float velocityY;
+    float accX;
+    float accY;
 };
 
 struct uniform
@@ -197,16 +201,29 @@ void simple_physics()
     }
 }
 
-void simple_physics_step(float t)
+void simple_physics_step(float t, bounding_box &box)
 {
-    bool collision_x = player.x + player.width / 2 >= 1.0f || player.x - player.width / 2 <= -1.0f;
-    bool collision_y = player.y + player.height / 2 >=1.0f || player.y - player.height / 2 <= -1.0f;
+    box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
+    box.velocityY += box.accY * t;
+
+    box.x += box.velocityX * t + 0.5 * box.accX * (t * t);
+    box.velocityX += box.accX * 0.002;
+    bool collision_x = box.x + box.width / 2 >= 1.0f || box.x - box.width / 2 <= -1.0f;
+    //bool collision_y = box.y + box.height / 2 >=1.0f || box.y - box.height / 2 <= -1.0f;
+    bool collision_top_y = box.y - box.height / 2 <= -1.0f;
+    bool collision_bottom_y = box.y + box.height / 2 >=1.0f;
     if (collision_x)
-        velocityX = -velocityX;
-    else if (collision_y)
-        velocityY = -velocityY;
-    player.x = player.x + (velocityX * t);
-    player.y = player.y + (velocityY * t);
+        box.velocityX = 0;
+    else if (collision_top_y)
+    {
+        box.velocityY = 0;
+        box.y = -1.0f + box.height/2;
+    }
+    else if (collision_bottom_y)
+    {
+        box.velocityY = 0.0f;
+        box.y = 1.0f - box.height/2;
+    }
 }
 
 std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, vk::PhysicalDevice selected_physical_device, vk::BufferUsageFlagBits usage, size_t size)
@@ -241,7 +258,10 @@ std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, 
 void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int mods)
 {
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+    {
         std::println("JUMP!");
+        player.velocityY = -1.0f;
+    }
     std::println("Key {} pressed!", key);
 }
 
@@ -590,6 +610,7 @@ int main()
     //std::thread phy_thread(simple_physics);
     glfwSetKeyCallback(window, keyboard_handle);
     auto before = clock::now();
+    player.accY = 0.5f;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -607,9 +628,9 @@ int main()
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
         auto time_elapsed = clock::now() - before;
-        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count());
+        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player);
         before = clock::now();
-        u.transform = move({player.x, player.y}) * rotate(angle);
+        u.transform = move({player.x, player.y});
         memcpy(uniform_data, &u, sizeof(uniform));
 
         angle -= 1.0f;
