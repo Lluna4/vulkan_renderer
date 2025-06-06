@@ -238,6 +238,13 @@ std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, 
     return std::make_pair(vertex_buffer_memory, vertex_buffer);
 }
 
+void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int mods)
+{
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+        std::println("JUMP!");
+    std::println("Key {} pressed!", key);
+}
+
 int main()
 {
     using clock = std::chrono::system_clock;
@@ -581,6 +588,7 @@ int main()
     float angle = 0.0f;
     float vel2 = 0.005f;
     //std::thread phy_thread(simple_physics);
+    glfwSetKeyCallback(window, keyboard_handle);
     auto before = clock::now();
     while(!glfwWindowShouldClose(window))
     {
