@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <thread>
+#include <random>
 
 bool skip_rendering = false;
 vk::SurfaceFormatKHR format;
@@ -201,7 +202,7 @@ void simple_physics()
     }
 }
 
-void simple_physics_step(float t, bounding_box &box)
+void simple_physics_step(float t, bounding_box &box, std::vector<bounding_box> boxes = {})
 {
     box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
     box.velocityY += box.accY * t;
@@ -260,9 +261,47 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
     {
         std::println("JUMP!");
-        player.velocityY = -1.0f;
+        player.velocityY = -1.2f;
     }
     std::println("Key {} pressed!", key);
+}
+
+bounding_box spawn_enemy(std::mt19937 rng)
+{
+    std::uniform_real_distribution<float> dist(0.05, 0.3);
+    std::uniform_real_distribution<float> y_dist(-0.7, -0.5);
+    std::uniform_real_distribution<float> vel_dist(-1.0, -0.5);// TODO: Shader for enemies
+    bounding_box ret{0};
+    ret.height = dist(rng);
+    ret.width = dist(rng);
+    ret.x = 0.8;
+    ret.y = y_dist(rng);
+    ret.velocityX = vel_dist(rng);
+    return ret;
+}
+
+void add_quad_to_vertices(std::vector<vertex> &vertices, std::vector<vertex> new_quad)
+{
+    new_quad = convert_quad_to_triangles(new_quad);
+
+    for (auto vert: new_quad)
+    {
+        //std::println("Vertex pos x: {}, y: {}, z: {}", vert.position.x, vert.position.y, vert.position.z);
+        vertices.push_back(vert);
+    }
+}
+
+std::vector<vertex> bounding_box_to_vertices(const bounding_box &box)
+{
+    float half_width = box.width/2;
+    float half_height = box.height/2;
+    std::vector<vertex> vertices = {
+        {{-half_width, -half_height}, {1.0f, 0.0f, 0.0f}},
+        {{half_width, -half_height}, {1.0f, 0.0f, 0.0f}},
+        {{half_width, half_height}, {0.0f, 1.0f, 0.0f}},
+        {{-half_width, half_height}, {0.0f, 0.0f, 1.0f}}
+    };
+    return vertices;
 }
 
 int main()
@@ -270,6 +309,8 @@ int main()
     using clock = std::chrono::system_clock;
     using ms = std::chrono::duration<double, std::milli>;
     GLFWwindow *window = create_window(1000, 800, "hello");
+    std::random_device dev;
+    std::mt19937 rng(dev());
 
     if (!window)
         return -1;
@@ -542,8 +583,8 @@ int main()
 
     std::vector<vertex> vertices = {
         {{-0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.1f, 0.1f}, {0.0f, 1.0f, 0.0f}},
+        {{0.0f, -0.1f}, {1.0f, 0.0f, 0.0f}},
+        {{0.0f, 0.1f}, {0.0f, 1.0f, 0.0f}},
         {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
     vertices = convert_quad_to_triangles(vertices);
@@ -610,7 +651,10 @@ int main()
     //std::thread phy_thread(simple_physics);
     glfwSetKeyCallback(window, keyboard_handle);
     auto before = clock::now();
-    player.accY = 0.5f;
+    player.accY = 1.3f;
+    player.x = -0.8;
+    player.y = -0.5;
+    std::vector<bounding_box> enemies;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -627,6 +671,12 @@ int main()
         }
         uint32_t image_index = image_result.value;
         vkResetCommandBuffer(command_buffers[0], 0);
+        if (enemies.empty())
+        {
+            bounding_box enemy = spawn_enemy(rng);
+            add_quad_to_vertices(vertices, bounding_box_to_vertices(enemy));
+
+        }
         auto time_elapsed = clock::now() - before;
         simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player);
         before = clock::now();
