@@ -33,6 +33,8 @@ struct bounding_box
     float accY;
 };
 
+
+
 struct uniform
 {
     glm::mat4 view;
@@ -41,6 +43,13 @@ struct uniform
 struct push
 {
     glm::mat4 transform;
+};
+
+struct quad
+{
+    bounding_box box;
+    std::vector<vertex> vertices;
+    push trans;
 };
 
 bounding_box player;
@@ -207,7 +216,7 @@ void simple_physics()
     }
 }
 
-void simple_physics_step(float t, bounding_box &box, std::vector<bounding_box> &boxes)
+void simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
 {
     box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
     box.velocityY += box.accY * t;
@@ -217,11 +226,11 @@ void simple_physics_step(float t, bounding_box &box, std::vector<bounding_box> &
 
     for (auto &b: boxes)
     {
-        b.y += b.velocityY * t + 0.5 * b.accY * (t * t);
-        b.velocityY += b.accY * t;
+        b.box.y += b.box.velocityY * t + 0.5 * b.box.accY * (t * t);
+        b.box.velocityY += b.box.accY * t;
 
-        b.x += b.velocityX * t + 0.5 * b.accX * (t * t);
-        b.velocityX += b.accX * 0.002;
+        b.box.x += b.box.velocityX * t + 0.5 * b.box.accX * (t * t);
+        b.box.velocityX += b.box.accX * 0.002;
     }
 
     bool collision_x = box.x + box.width / 2 >= 1.0f || box.x - box.width / 2 <= -1.0f;
@@ -598,19 +607,20 @@ int main()
                                                                         framebuffer_extension.height, 1);
         framebuffers.push_back(device.createFramebuffer(framebuffer_info));
     }
-
-    std::vector<vertex> vertices = {
+    quad play{};
+    play.box = player;
+    play.vertices = {
         {{-0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
         {{0.0f, -0.1f}, {1.0f, 0.0f, 0.0f}},
         {{0.0f, 0.1f}, {0.0f, 1.0f, 0.0f}},
         {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
-    vertices = convert_quad_to_triangles(vertices);
-    auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices[0]) * 100);
-    vk::DeviceMemory vertex_buffer_memory = ret.first;
+    play.vertices = convert_quad_to_triangles(play.vertices);
+    auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertex) * 6 * 100);
+    vk::DeviceMemory vertex_memory = ret.first;
     vk::Buffer vertex_buffer = ret.second;
-    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, sizeof(vertices[0]) * 100);
-    memcpy(data, vertices.data(), sizeof(vertices[0]) * vertices.size());
+    char *vertex_data = (char *)device.mapMemory(vertex_memory, 0, sizeof(vertex) * 6 * 100); // 100 quads
+    memcpy(vertex_data, play.vertices.data(), sizeof(play.vertices[0]) * play.vertices.size());
     
 
     vk::CommandPoolCreateInfo command_pool_info = {};
@@ -663,7 +673,7 @@ int main()
     player.height = 0.2f;
     player.width = 0.2f;
     //velocityX = 0.008f;
-    std::vector<vertex> render_vertices = vertices;
+
     float angle = 0.0f;
     float vel2 = 0.005f;
     //std::thread phy_thread(simple_physics);
@@ -672,10 +682,11 @@ int main()
     player.accY = 1.3f;
     player.x = -0.8;
     player.y = -0.5;
-    std::vector<bounding_box> enemies;
+    std::vector<quad> enemies;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+        std::vector<vertex> render_vertices = play.vertices;
         auto res_wait = device.waitForFences(next_frame_fence, VK_TRUE, UINT64_MAX);
         if (res_wait != vk::Result::eSuccess)
             throw std::runtime_error("failed waiting!");
@@ -691,21 +702,31 @@ int main()
         vkResetCommandBuffer(command_buffers[0], 0);
         if (enemies.empty())
         {
-            bounding_box enemy = spawn_enemy(rng);
-            add_quad_to_vertices(render_vertices, bounding_box_to_vertices(enemy));
+            quad enemy{};
+            std::mt19937 rng2(dev());
+            enemy.box = spawn_enemy(rng2);
+            enemy.vertices = bounding_box_to_vertices(enemy.box);
+            enemy.trans.transform = glm::mat4{1.0f};
             enemies.push_back(enemy);
         }
         auto time_elapsed = clock::now() - before;
         simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player, enemies);
         before = clock::now();
-        push first_transform{};
-        first_transform.transform = move({player.x, player.y});
-        push second_transform{};
-        second_transform.transform = move({enemies[0].x, enemies[0].y});
+        play.trans.transform = move({player.x, player.y});
+        for (auto &e: enemies)
+        {
+            if (e.box.x <= -1.0f)
+            {
+                enemies.clear();
+                break;
+            }
+            e.trans.transform = move({e.box.x, e.box.y});
+            add_quad_to_vertices(render_vertices, e.vertices);
+        }
         //memcpy(uniform_data, &u, sizeof(uniform));
 
         angle -= 1.0f;
-        memcpy(data, render_vertices.data(), sizeof(vertices[0]) * render_vertices.size());
+        memcpy(vertex_data, render_vertices.data(), sizeof(render_vertices[0]) * render_vertices.size());
 
 
         vk::CommandBufferBeginInfo begin_info = {};
@@ -721,10 +742,16 @@ int main()
         //command_buffers[0].setScissor(0, scissor);
         command_buffers[0].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, descriptor_sets, nullptr);
         command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
-        command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &first_transform);
+        command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &play.trans);
         command_buffers[0].draw(6, 1, 0, 0);
-        command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &second_transform);
-        command_buffers[0].draw(6, 1, 6, 0);
+        uint32_t offset_vertex = 6;
+        for (auto &e: enemies)
+        {
+            command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &e.trans);
+            command_buffers[0].draw(6, 1, offset_vertex, 0);
+            offset_vertex += 6;
+        }
+
         command_buffers[0].endRenderPass();
         if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
         {
@@ -757,13 +784,13 @@ int main()
     thread = false;
     //phy_thread.join();
     device.unmapMemory(uniform_buffer_data);
-    device.unmapMemory(vertex_buffer_memory);
+    device.unmapMemory(vertex_memory);
     device.waitIdle();
     device.destroyDescriptorPool(descriptor_pool);
     device.destroyDescriptorSetLayout(descriptor_layout);
     device.destroyBuffer(vertex_buffer);
     device.destroyBuffer(uniform_buffer);
-    device.freeMemory(vertex_buffer_memory);
+    device.freeMemory(vertex_memory);
     device.freeMemory(uniform_buffer_data);
     for (auto &framebuffer: framebuffers)
     {
