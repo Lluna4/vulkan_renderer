@@ -35,6 +35,11 @@ struct bounding_box
 
 struct uniform
 {
+    glm::mat4 view;
+};
+
+struct push
+{
     glm::mat4 transform;
 };
 
@@ -202,15 +207,24 @@ void simple_physics()
     }
 }
 
-void simple_physics_step(float t, bounding_box &box, std::vector<bounding_box> boxes = {})
+void simple_physics_step(float t, bounding_box &box, std::vector<bounding_box> &boxes)
 {
     box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
     box.velocityY += box.accY * t;
 
     box.x += box.velocityX * t + 0.5 * box.accX * (t * t);
     box.velocityX += box.accX * 0.002;
+
+    for (auto &b: boxes)
+    {
+        b.y += b.velocityY * t + 0.5 * b.accY * (t * t);
+        b.velocityY += b.accY * t;
+
+        b.x += b.velocityX * t + 0.5 * b.accX * (t * t);
+        b.velocityX += b.accX * 0.002;
+    }
+
     bool collision_x = box.x + box.width / 2 >= 1.0f || box.x - box.width / 2 <= -1.0f;
-    //bool collision_y = box.y + box.height / 2 >=1.0f || box.y - box.height / 2 <= -1.0f;
     bool collision_top_y = box.y - box.height / 2 <= -1.0f;
     bool collision_bottom_y = box.y + box.height / 2 >=1.0f;
     if (collision_x)
@@ -269,8 +283,8 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
 bounding_box spawn_enemy(std::mt19937 rng)
 {
     std::uniform_real_distribution<float> dist(0.05, 0.3);
-    std::uniform_real_distribution<float> y_dist(-0.7, -0.5);
-    std::uniform_real_distribution<float> vel_dist(-1.0, -0.5);// TODO: Shader for enemies
+    std::uniform_real_distribution<float> y_dist(0.7, 0.5);
+    std::uniform_real_distribution<float> vel_dist(-1.0, -0.5);
     bounding_box ret{0};
     ret.height = dist(rng);
     ret.width = dist(rng);
@@ -504,13 +518,17 @@ int main()
     vk::DescriptorSetLayoutCreateInfo descriptor_layout_info(vk::DescriptorSetLayoutCreateFlags(), 1, &descriptor_binding);
     vk::DescriptorSetLayout descriptor_layout = device.createDescriptorSetLayout(descriptor_layout_info);
 
+    vk::PushConstantRange push_constant(vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push));
+
     vk::PipelineLayoutCreateInfo layout_info = {};
     layout_info.setLayoutCount = 1;
     layout_info.pSetLayouts = &descriptor_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &push_constant;
     vk::PipelineLayout pipeline_layout = device.createPipelineLayout(layout_info);
 
     uniform u{};
-    u.transform = glm::mat4(1.0f);
+    u.view = glm::mat4(1.0f);
     auto rec = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eUniformBuffer, sizeof(uniform));
     vk::DeviceMemory uniform_buffer_data = rec.first;
     vk::Buffer uniform_buffer = rec.second;
@@ -588,10 +606,10 @@ int main()
         {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
     vertices = convert_quad_to_triangles(vertices);
-    auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices[0]) * vertices.size());
+    auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices[0]) * 100);
     vk::DeviceMemory vertex_buffer_memory = ret.first;
     vk::Buffer vertex_buffer = ret.second;
-    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, sizeof(vertices[0]) * vertices.size());
+    char *data = (char *)device.mapMemory(vertex_buffer_memory, 0, sizeof(vertices[0]) * 100);
     memcpy(data, vertices.data(), sizeof(vertices[0]) * vertices.size());
     
 
@@ -674,17 +692,20 @@ int main()
         if (enemies.empty())
         {
             bounding_box enemy = spawn_enemy(rng);
-            add_quad_to_vertices(vertices, bounding_box_to_vertices(enemy));
-
+            add_quad_to_vertices(render_vertices, bounding_box_to_vertices(enemy));
+            enemies.push_back(enemy);
         }
         auto time_elapsed = clock::now() - before;
-        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player);
+        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player, enemies);
         before = clock::now();
-        u.transform = move({player.x, player.y});
-        memcpy(uniform_data, &u, sizeof(uniform));
+        push first_transform{};
+        first_transform.transform = move({player.x, player.y});
+        push second_transform{};
+        second_transform.transform = move({enemies[0].x, enemies[0].y});
+        //memcpy(uniform_data, &u, sizeof(uniform));
 
         angle -= 1.0f;
-        memcpy(data, render_vertices.data(), sizeof(vertices[0]) * vertices.size());
+        memcpy(data, render_vertices.data(), sizeof(vertices[0]) * render_vertices.size());
 
 
         vk::CommandBufferBeginInfo begin_info = {};
@@ -700,7 +721,10 @@ int main()
         //command_buffers[0].setScissor(0, scissor);
         command_buffers[0].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, descriptor_sets, nullptr);
         command_buffers[0].bindVertexBuffers(0, 1, &vertex_buffer, &offset);
-        command_buffers[0].draw(vertices.size(), 1, 0, 0);
+        command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &first_transform);
+        command_buffers[0].draw(6, 1, 0, 0);
+        command_buffers[0].pushConstants(pipeline_layout, vk::ShaderStageFlags(vk::ShaderStageFlagBits::eVertex), 0, sizeof(push), &second_transform);
+        command_buffers[0].draw(6, 1, 6, 0);
         command_buffers[0].endRenderPass();
         if (vkEndCommandBuffer(command_buffers[0]) != VK_SUCCESS)
         {
@@ -732,12 +756,15 @@ int main()
     }
     thread = false;
     //phy_thread.join();
+    device.unmapMemory(uniform_buffer_data);
     device.unmapMemory(vertex_buffer_memory);
     device.waitIdle();
     device.destroyDescriptorPool(descriptor_pool);
     device.destroyDescriptorSetLayout(descriptor_layout);
     device.destroyBuffer(vertex_buffer);
+    device.destroyBuffer(uniform_buffer);
     device.freeMemory(vertex_buffer_memory);
+    device.freeMemory(uniform_buffer_data);
     for (auto &framebuffer: framebuffers)
     {
         device.destroyFramebuffer(framebuffer);

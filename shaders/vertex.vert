@@ -3,9 +3,13 @@
 // x -> -1 (left) 1(right)
 // y -> -1 (top)  1(bottom)
 
-layout(binding = 0) uniform un{
+layout( push_constant ) uniform push{
     mat4 transform;
-} trans;
+}trans;
+
+layout(binding = 0) uniform un{
+    mat4 view;
+} view;
 
 layout(location = 0) in vec2 in_position;
 layout(location = 1) in vec3 in_color;
