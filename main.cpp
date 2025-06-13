@@ -216,13 +216,14 @@ void simple_physics()
     }
 }
 
-void simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
+bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
 {
     box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
     box.velocityY += box.accY * t;
 
     box.x += box.velocityX * t + 0.5 * box.accX * (t * t);
-    box.velocityX += box.accX * 0.002;
+    box.velocityX += box.accX * t;
+    bool end_game = false;
 
     for (auto &b: boxes)
     {
@@ -230,7 +231,11 @@ void simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
         b.box.velocityY += b.box.accY * t;
 
         b.box.x += b.box.velocityX * t + 0.5 * b.box.accX * (t * t);
-        b.box.velocityX += b.box.accX * 0.002;
+        b.box.velocityX += b.box.accX * t;
+
+        bool collision_x = b.box.x + b.box.width / 2 >= box.x - box.width /2 && b.box.x - b.box.width / 2 <= box.x + box.width /2;
+        bool collision_y = b.box.y + b.box.height / 2 >= box.y - box.height /2 && b.box.y - b.box.height / 2 <= box.y + box.height /2;
+        end_game = collision_x && collision_y;
     }
 
     bool collision_x = box.x + box.width / 2 >= 1.0f || box.x - box.width / 2 <= -1.0f;
@@ -248,6 +253,7 @@ void simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
         box.velocityY = 0.0f;
         box.y = 1.0f - box.height/2;
     }
+    return end_game;
 }
 
 std::pair<vk::DeviceMemory, vk::Buffer> create_buffer(const vk::Device &device, vk::PhysicalDevice selected_physical_device, vk::BufferUsageFlagBits usage, size_t size)
@@ -286,13 +292,15 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
         std::println("JUMP!");
         player.velocityY = -1.2f;
     }
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+        exit(0);
     std::println("Key {} pressed!", key);
 }
 
 bounding_box spawn_enemy(std::mt19937 rng)
 {
     std::uniform_real_distribution<float> dist(0.05, 0.3);
-    std::uniform_real_distribution<float> y_dist(0.7, 0.5);
+    std::uniform_real_distribution<float> y_dist(0.9, 0.6);
     std::uniform_real_distribution<float> vel_dist(-1.0, -0.5);
     bounding_box ret{0};
     ret.height = dist(rng);
@@ -710,12 +718,17 @@ int main()
             enemies.push_back(enemy);
         }
         auto time_elapsed = clock::now() - before;
-        simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player, enemies);
+        bool end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player, enemies);
+        if (end_game == true)
+        {
+            std::println("You lost!");
+            skip_rendering = true;
+        }
         before = clock::now();
         play.trans.transform = move({player.x, player.y});
         for (auto &e: enemies)
         {
-            if (e.box.x <= -1.0f)
+            if (e.box.x + e.box.width/2 <= -1.0f)
             {
                 enemies.clear();
                 break;
@@ -758,7 +771,7 @@ int main()
             throw std::runtime_error("Command buffer creation failed!");
         }
 
-        vk::PipelineStageFlags flags =  vk::PipelineStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        vk::PipelineStageFlags flags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
         vk::SubmitInfo submit_info = vk::SubmitInfo();
         submit_info.waitSemaphoreCount = 1;
         submit_info.pWaitSemaphores = &image_semaphore;
