@@ -10,6 +10,7 @@
 #include <random>
 
 bool skip_rendering = false;
+bool stop_physics = false;
 vk::SurfaceFormatKHR format;
 vk::Extent2D framebuffer_extension;
 
@@ -236,6 +237,12 @@ bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
         bool collision_x = b.box.x + b.box.width / 2 >= box.x - box.width /2 && b.box.x - b.box.width / 2 <= box.x + box.width /2;
         bool collision_y = b.box.y + b.box.height / 2 >= box.y - box.height /2 && b.box.y - b.box.height / 2 <= box.y + box.height /2;
         end_game = collision_x && collision_y;
+        if (end_game)
+        {
+            std::println("Collision between pos x: {} y: {} and pos x: {} and pos y: {} ", box.x, box.y, b.box.x, b.box.y);
+            std::println("With width: {} and height: {} and width: {} and height: {}", box.width, box.height, b.box.width, b.box.height);
+            std::println("Rightmost vertex in position {} collided with leftmost vertex in position {}", box.x + box.width/2, b.box.x - b.box.width/2);
+        }
     }
 
     bool collision_x = box.x + box.width / 2 >= 1.0f || box.x - box.width / 2 <= -1.0f;
@@ -618,10 +625,10 @@ int main()
     quad play{};
     play.box = player;
     play.vertices = {
-        {{-0.1f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.0f, -0.1f}, {1.0f, 0.0f, 0.0f}},
-        {{0.0f, 0.1f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.1f, 0.1f}, {0.0f, 0.0f, 1.0f}}
+        {{-0.05f, -0.1f}, {1.0f, 0.0f, 0.0f}},
+        {{0.05f, -0.1f}, {1.0f, 0.0f, 0.0f}},
+        {{0.05f, 0.1f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.05f, 0.1f}, {0.0f, 0.0f, 1.0f}}
     };
     play.vertices = convert_quad_to_triangles(play.vertices);
     auto ret = create_buffer(device, selected_physical_device, vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertex) * 6 * 100);
@@ -679,17 +686,18 @@ int main()
     player.x = 0.0f;
     player.y = 0.0f;
     player.height = 0.2f;
-    player.width = 0.2f;
+    player.width = 0.1f;
     //velocityX = 0.008f;
 
     float angle = 0.0f;
     float vel2 = 0.005f;
     //std::thread phy_thread(simple_physics);
-    glfwSetKeyCallback(window, keyboard_handle);
+    glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
     auto before = clock::now();
     player.accY = 1.3f;
     player.x = -0.8;
     player.y = -0.5;
+    play.box = player;
     std::vector<quad> enemies;
     while(!glfwWindowShouldClose(window))
     {
@@ -700,7 +708,9 @@ int main()
             throw std::runtime_error("failed waiting!");
         device.resetFences(next_frame_fence);
         if (skip_rendering)
+        {
             continue;
+        }
         auto image_result = device.acquireNextImageKHR(swapchain, UINT64_MAX, image_semaphore);
         if (image_result.result != vk::Result::eSuccess)
         {
@@ -718,14 +728,25 @@ int main()
             enemies.push_back(enemy);
         }
         auto time_elapsed = clock::now() - before;
-        bool end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), player, enemies);
+        int state = glfwGetKey(window, GLFW_KEY_SPACE);
+        if (state == GLFW_PRESS)
+        {
+            std::println("JUMP!");
+            play.box.velocityY = -1.2f;
+        }
+        bool end_game = false;
+        if (stop_physics == false)
+            end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), play.box, enemies);
         if (end_game == true)
         {
             std::println("You lost!");
-            skip_rendering = true;
+            stop_physics = true;
+            std::println("Collision between pos x: {} y: {} and pos x: {} and pos y: {} ", play.box.x, play.box.y, enemies[0].box.x, enemies[0].box.y);
+            std::println("With width: {} and height: {} and width: {} and height: {}", play.box.width, play.box.height, enemies[0].box.width, enemies[0].box.height);
+            std::println("Rightmost vertex in position {} collided with leftmost vertex in position {}", play.box.x + play.box.width/2, enemies[0].box.x - enemies[0].box.width/2);
         }
         before = clock::now();
-        play.trans.transform = move({player.x, player.y});
+        play.trans.transform = move({play.box.x, play.box.y});
         for (auto &e: enemies)
         {
             if (e.box.x + e.box.width/2 <= -1.0f)
@@ -738,7 +759,7 @@ int main()
         }
         //memcpy(uniform_data, &u, sizeof(uniform));
 
-        angle -= 1.0f;
+        angle -= 0.01f;
         memcpy(vertex_data, render_vertices.data(), sizeof(render_vertices[0]) * render_vertices.size());
 
 
