@@ -217,7 +217,7 @@ void simple_physics()
     }
 }
 
-bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
+bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes, bool &on_ground)
 {
     box.y += box.velocityY * t + 0.5 * box.accY * (t * t);
     box.velocityY += box.accY * t;
@@ -239,9 +239,11 @@ bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
         end_game = collision_x && collision_y;
         if (end_game)
         {
+            #ifdef NDEBUG
             std::println("Collision between pos x: {} y: {} and pos x: {} and pos y: {} ", box.x, box.y, b.box.x, b.box.y);
             std::println("With width: {} and height: {} and width: {} and height: {}", box.width, box.height, b.box.width, b.box.height);
             std::println("Rightmost vertex in position {} collided with leftmost vertex in position {}", box.x + box.width/2, b.box.x - b.box.width/2);
+            #endif
         }
     }
 
@@ -259,6 +261,7 @@ bool simple_physics_step(float t, bounding_box &box, std::vector<quad> &boxes)
     {
         box.velocityY = 0.0f;
         box.y = 1.0f - box.height/2;
+        on_ground = true;
     }
     return end_game;
 }
@@ -306,9 +309,9 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
 
 bounding_box spawn_enemy(std::mt19937 rng)
 {
-    std::uniform_real_distribution<float> dist(0.05, 0.3);
+    std::uniform_real_distribution<float> dist(0.05, 0.4);
     std::uniform_real_distribution<float> y_dist(0.9, 0.6);
-    std::uniform_real_distribution<float> vel_dist(-1.0, -0.5);
+    std::uniform_real_distribution<float> vel_dist(-1.5, -0.5);
     bounding_box ret{0};
     ret.height = dist(rng);
     ret.width = dist(rng);
@@ -699,6 +702,8 @@ int main()
     player.y = -0.5;
     play.box = player;
     std::vector<quad> enemies;
+    bool on_ground = true;
+    int score = 0;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
@@ -731,19 +736,28 @@ int main()
         int state = glfwGetKey(window, GLFW_KEY_SPACE);
         if (state == GLFW_PRESS)
         {
+            #ifndef NDEBUG
             std::println("JUMP!");
-            play.box.velocityY = -1.2f;
+            #endif
+            if (on_ground)
+            {
+                play.box.velocityY = -1.2f;
+                on_ground = false;
+            }
         }
         bool end_game = false;
         if (stop_physics == false)
-            end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), play.box, enemies);
+            end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), play.box, enemies, on_ground);
         if (end_game == true)
         {
             std::println("You lost!");
+            std::println("Your score was {}", score);
             stop_physics = true;
+            #ifndef NDEBUG
             std::println("Collision between pos x: {} y: {} and pos x: {} and pos y: {} ", play.box.x, play.box.y, enemies[0].box.x, enemies[0].box.y);
             std::println("With width: {} and height: {} and width: {} and height: {}", play.box.width, play.box.height, enemies[0].box.width, enemies[0].box.height);
             std::println("Rightmost vertex in position {} collided with leftmost vertex in position {}", play.box.x + play.box.width/2, enemies[0].box.x - enemies[0].box.width/2);
+            #endif
         }
         before = clock::now();
         play.trans.transform = move({play.box.x, play.box.y});
@@ -751,6 +765,7 @@ int main()
         {
             if (e.box.x + e.box.width/2 <= -1.0f)
             {
+                score += (int)(abs((e.box.width * 10)) + abs((e.box.height * 10)) + abs((e.box.velocityX * 10)));
                 enemies.clear();
                 break;
             }
