@@ -11,6 +11,8 @@
 
 bool skip_rendering = false;
 bool stop_physics = false;
+std::atomic_bool pressed_space = false;
+std::atomic_bool pressed_shift = false;
 vk::SurfaceFormatKHR format;
 vk::Extent2D framebuffer_extension;
 
@@ -299,12 +301,15 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
 {
     if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
     {
-        std::println("JUMP!");
-        player.velocityY = -1.2f;
+        //std::println("JUMP!");
+        pressed_space = true;
+    }
+    else if (key == GLFW_KEY_LEFT_SHIFT && action == GLFW_PRESS)
+    {
+        pressed_shift = true;
     }
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         exit(0);
-    std::println("Key {} pressed!", key);
 }
 
 bounding_box spawn_enemy(std::mt19937 rng)
@@ -695,7 +700,7 @@ int main()
     float angle = 0.0f;
     float vel2 = 0.005f;
     //std::thread phy_thread(simple_physics);
-    glfwSetInputMode(window, GLFW_STICKY_KEYS, GLFW_TRUE);
+    glfwSetKeyCallback(window, keyboard_handle);
     auto before = clock::now();
     player.accY = 1.3f;
     player.x = -0.8;
@@ -703,6 +708,7 @@ int main()
     play.box = player;
     std::vector<quad> enemies;
     bool on_ground = true;
+    int jumps = 0;
     int score = 0;
     while(!glfwWindowShouldClose(window))
     {
@@ -733,21 +739,31 @@ int main()
             enemies.push_back(enemy);
         }
         auto time_elapsed = clock::now() - before;
-        int state = glfwGetKey(window, GLFW_KEY_SPACE);
-        if (state == GLFW_PRESS)
+        if (pressed_space == true)
         {
             #ifndef NDEBUG
-            std::println("JUMP!");
+            //std::println("JUMP!");
             #endif
-            if (on_ground)
+            if (on_ground || jumps <= 1)
             {
-                play.box.velocityY = -1.2f;
+                if (jumps <= 1)
+                    play.box.velocityY = -1.2f;
                 on_ground = false;
+                jumps++;
+                std::println("Jumps {}", jumps);
             }
+            pressed_space = false;
+        }
+        if (pressed_shift == true)
+        {
+            play.box.velocityY = 3.0f;
+            pressed_shift = false;
         }
         bool end_game = false;
         if (stop_physics == false)
             end_game = simple_physics_step(std::chrono::duration_cast<std::chrono::duration<float>>(time_elapsed).count(), play.box, enemies, on_ground);
+        if (on_ground)
+            jumps = 0;
         if (end_game == true)
         {
             std::println("You lost!");
@@ -757,6 +773,7 @@ int main()
             std::println("Collision between pos x: {} y: {} and pos x: {} and pos y: {} ", play.box.x, play.box.y, enemies[0].box.x, enemies[0].box.y);
             std::println("With width: {} and height: {} and width: {} and height: {}", play.box.width, play.box.height, enemies[0].box.width, enemies[0].box.height);
             std::println("Rightmost vertex in position {} collided with leftmost vertex in position {}", play.box.x + play.box.width/2, enemies[0].box.x - enemies[0].box.width/2);
+            std::println("Jumps {}", jumps);
             #endif
         }
         before = clock::now();
