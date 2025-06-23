@@ -315,7 +315,7 @@ void keyboard_handle(GLFWwindow *window, int key, int scancode, int action, int 
 bounding_box spawn_enemy(std::mt19937 rng)
 {
     std::uniform_real_distribution<float> dist(0.05, 0.4);
-    std::uniform_real_distribution<float> y_dist(0.9, 0.6);
+    std::uniform_real_distribution<float> y_dist(0.6, 0.9);
     std::uniform_real_distribution<float> vel_dist(-1.5, -0.5);
     bounding_box ret{0};
     ret.height = dist(rng);
@@ -382,7 +382,10 @@ int main()
     #endif
     
     vk::InstanceCreateInfo createinfo = vk::InstanceCreateInfo(
-        vk::InstanceCreateFlags(VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR), 
+        #ifdef __APPLE__
+        vk::InstanceCreateFlags(VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR),
+        #endif
+        vk::InstanceCreateFlags(),
         &appinfo,layers.size(), layers.data(), 
         extensions.size(), extensions.data());
     vk::Instance instance = vk::createInstance(createinfo);
