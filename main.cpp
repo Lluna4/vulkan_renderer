@@ -385,7 +385,9 @@ int main()
         #ifdef __APPLE__
         vk::InstanceCreateFlags(VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR),
         #endif
+        #ifdef __linux__
         vk::InstanceCreateFlags(),
+        #endif
         &appinfo,layers.size(), layers.data(), 
         extensions.size(), extensions.data());
     vk::Instance instance = vk::createInstance(createinfo);
